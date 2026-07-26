@@ -11,7 +11,10 @@ export default function WatchPartyPanel() {
   const [summary, setSummary] = useState([])
 
   useEffect(() => {
-    api.get('/api/me').then((d) => setMyId(d.member.id)).catch(() => {})
+    api.get('/api/me').then((d) => {
+      setMyId(d.member.id)
+      window.__nuzLocalDownloads = !!d.localDownloads // gates local .state downloads app-wide
+    }).catch(() => {})
     const refresh = () => api.get('/api/lobby/summary').then(setSummary).catch(() => {})
     refresh()
     const t = setInterval(refresh, 15000)

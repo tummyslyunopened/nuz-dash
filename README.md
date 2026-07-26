@@ -48,9 +48,10 @@ For development with hot reload: `npm run dev` (client on http://localhost:5173)
   automatically once the party has synced and self-recovers after save-state loads.
   When a wild battle starts, a confirm card pops up — pick the location and hit
   Caught/Killed/Fled/Missed, or dismiss (trainer battles trigger it too).
-- **Auto backups** — live-party auto-sync is on by default; every new in-game save it
-  detects triggers browser downloads of the battery save (.srm) and a save state
-  (.state), so there's always a local recovery point.
+- **Auto backups & resume** — live-party auto-sync is on by default; every new
+  in-game save it detects downloads a `.state` backup to your browser and updates
+  the server-side auto-save, which loads automatically the next time you start the
+  game. Manual save states live in the emulator's own menu.
 - **Live party sync** — for Gen 3 (GBA) games and hacks that keep the stock save
   layout: save in-game, hit "Sync from game" (or enable 10s auto-sync), and the app
   parses the battery save directly — party species, nicknames, levels, HP, status,

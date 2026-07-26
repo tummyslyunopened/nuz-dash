@@ -35,8 +35,26 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   tunnelHostname }.
 - Binary dirs under server/data: roms/, states/ (`<runId>-<slot>.state`, slots
   1,2,3,auto), sprites/ (proxy cache), dumps/ (heap dumps), bugreports/.
-- Save-state "auto" slot: pushed by client on detected in-game saves + 3-min
-  heartbeat; newest server state auto-loads on game start.
+- Save-state "auto" slot: written ONLY when the live-party sync detects a new
+  in-game save (save counter increment); it auto-loads on every game start.
+  Manual slots 1-3 exist in the API but have no UI — the emulator's own menu
+  covers manual states. Local auto-downloads are .state files only.
+  CRITICAL nuance: savestates do NOT reliably include SRAM, so the battery
+  save is ALSO backed up server-side (POST/GET /api/runs/:id/sav) on each
+  detected save, and restored into the emulator FS on boot BEFORE the state
+  loads — without it the party scanner/radar starve until the first new
+  in-game save of the session.
+- **Game-data reliability invariants** (do not weaken): the battery save (.sav)
+  is the SOURCE OF TRUTH — everything correctness-critical parses it, and
+  AUTO-RESUME RESTORES THE SAV ONLY (title screen → Continue, like real
+  hardware). States are archive/manual-use artifacts, never auto-loaded.
+  States are stamped with EMU_CORE_VERSION on write and refused on read if it
+  mismatches — BUMP that constant in server.js whenever the vendored
+  EmulatorJS cores are upgraded. All binary writes (sav/state/history/ROM) go
+  through writeAtomic. The session's first party sync seeds the server pair.
+  A single-session guard (X-Nuz-Session header + /api/runs/:id/session
+  heartbeat) makes the server reject sav/state pushes from superseded
+  sessions — prevents branching save lineages from concurrent tabs/devices.
 - Live streams: in-memory Map only (memberId → jpeg frame), never persisted.
 
 ### Client (`client/`, React + Vite, no TS)
@@ -64,6 +82,19 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   index.html and the emulator breaks mysteriously.
 - Boot: set `window.EJS_*` globals then inject `/emulatorjs/loader.js`. Emulator
   can't be torn down — panels stay mounted and views hide via CSS.
+- **EmulatorJS event gotcha**: registering `EJS_onSaveState` / `EJS_onLoadState`
+  / `EJS_onLoadSave` SUPPRESSES the emulator's default handling of those
+  actions (`callEvent(...) > 0` short-circuits). Our save hook therefore
+  replicates the local download itself; load detection is done by monkey-
+  patching `gameManager.loadState`/`loadSaveFiles` (fires `nuz:memory-reset`,
+  which re-syncs the party and recalibrates the radar). Do NOT add interval-
+  based auto-STATES (EJS offers flavors of this) — checkpoints anchor to
+  in-game saves only; that decision is settled.
+- **Mobile fullscreen rule**: any prompt (confirm/permission/download priming/
+  new dialogs of ANY kind) must fully resolve BEFORE `enterMobileFullscreen()`
+  — a dialog appearing over fullscreen breaks it. When adding features that
+  prompt, sequence them ahead of fullscreen entry in start(), or defer them
+  until fullscreen exits (like the radar's info-only toasts).
 - gameManager API (on `window.EJS_emulator.gameManager`): `getState()` (sync
   Uint8Array), `loadState(bytes)`, `getSaveFile()` (battery save),
   `Module.HEAPU8` (entire WASM heap — basis of the radar).
@@ -76,6 +107,12 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   species names read from the ROM's own table in memory (find "Bulbasaur",
   stride 260 = pokeemerald-expansion gSpeciesInfo, 11 = vanilla names array).
   NO hardcoded emulator or per-game addresses — keep it that way.
+  Detections AUTO-LOG with no confirmation (status "missed", blank location,
+  wild-mon personality stored); annotation happens inline in the Encounters
+  table. Catches self-annotate: the party sync matches new party members'
+  personality against auto-logged encounters and flips them to "caught".
+  In mobile fullscreen, detections show info-only toasts portaled INTO
+  #ejs-wrap (native fullscreen renders only descendants).
 - Expansion-hack species enums are the hack's own (often natdex-ordered with
   forms appended) — never assume PokeAPI ids match; resolve via the ROM table.
 - Debug tools already built in: radar Diagnostics panel, Deep scan (during

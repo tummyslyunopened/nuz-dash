@@ -1,8 +1,55 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, Trophy, Gamepad2, Users } from 'lucide-react'
+import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, Trophy, Gamepad2, Users, History, Download, RefreshCw, HelpCircle } from 'lucide-react'
 import { api, authHeaders, rememberLink, forgetLink } from '../api.js'
 import StreamView from '../components/StreamView.jsx'
+import Tour from '../components/Tour.jsx'
+
+const TOUR_STEPS = [
+  {
+    title: 'Welcome to Nuz-Dash! 👋',
+    body: 'This lobby is home base for you and your friends: race Nuzlocke attempts side by side, watch each other play live, and let the app track everything automatically. Quick tour?'
+  },
+  {
+    selector: '[data-tour="secret-link"]',
+    title: 'Your secret link IS your account',
+    body: 'No passwords here — this link is how you get back in, on any device. Copy it and bookmark it somewhere safe. If you ever lose it, any lobby-mate can generate you a new one.'
+  },
+  {
+    selector: '[data-tour="invite-link"]',
+    title: 'Bring your friends',
+    body: 'Share the invite link privately (treat links like passwords). Everyone who joins gets their own secret link and races in this same lobby.'
+  },
+  {
+    selector: '[data-tour="rom"]',
+    title: 'One ROM, one race',
+    body: 'The lobby has a single game everyone runs — upload a legally-dumped ROM (patched hacks welcome). Every runner should own their own copy of the game.'
+  },
+  {
+    selector: '[data-tour="attempts"]',
+    title: 'Attempts',
+    body: 'Start an attempt to begin your run — pick rules like dupes clause and hardcore level caps. When a run dies, restart into attempt #2: the old one and its graveyard stay in your history forever.'
+  },
+  {
+    selector: '[data-tour="runners"]',
+    title: 'The watch party',
+    body: 'Everyone playing streams their game here live. Tap a runner to spectate their full run — encounters, deaths, diary and all.'
+  },
+  {
+    selector: '[data-tour="history"]',
+    title: 'Backups happen by themselves',
+    body: 'Every time you save in-game, a timestamped backup lands here (and your progress auto-resumes next launch). Download any historical save whenever you need one.'
+  },
+  {
+    selector: '.bug-fab',
+    title: 'Something broke?',
+    body: 'This button files a bug report with diagnostics attached. The lobby host sees it in their admin dashboard.'
+  },
+  {
+    title: 'Inside a run 🎮',
+    body: 'Open your attempt and you land in the Play view: the emulator (fullscreen on phones), an encounter radar that logs every wild battle automatically, and your live party synced from the game. Catches even mark themselves. Now go start attempt #1!'
+  }
+]
 
 const fmtSize = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`)
 const timeAgo = (iso) => {
@@ -26,6 +73,45 @@ export default function LobbyHome() {
   const [rules, setRules] = useState({ dupesClause: true, shinyClause: true, hardcore: false })
   const [uploading, setUploading] = useState(false)
   const [regenLink, setRegenLink] = useState(null) // { name, url } after regenerating someone's link
+  const [history, setHistory] = useState(null) // rolling sav/state backup archive
+  const [histShown, setHistShown] = useState(15)
+  const [tourOpen, setTourOpen] = useState(false)
+
+  // First arrival: run the tour once PER MEMBER (not per browser — a fresh
+  // join in the same browser is a new person). Triggers on the join/create
+  // handoff flag OR simply on being a brand-new member, so it can't be lost.
+  useEffect(() => {
+    if (!me) return
+    if (localStorage.getItem(`nuz-tour-done:${token}`)) return
+    const isNewMember = Date.now() - new Date(me.member.createdAt).getTime() < 10 * 60 * 1000
+    if (localStorage.getItem('nuz-tour-pending') || isNewMember) {
+      localStorage.removeItem('nuz-tour-pending')
+      const t = setTimeout(() => setTourOpen(true), 700)
+      return () => clearTimeout(t)
+    }
+  }, [me?.member?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const closeTour = () => {
+    setTourOpen(false)
+    localStorage.setItem(`nuz-tour-done:${token}`, '1')
+  }
+
+  const loadHistory = () => api.get('/api/me/save-history').then(setHistory).catch(() => {})
+
+  const downloadHistoryFile = async (f) => {
+    try {
+      const res = await fetch(`/api/me/save-history/${encodeURIComponent(f.file)}`, { headers: authHeaders() })
+      if (!res.ok) throw new Error(`${res.status}`)
+      const url = URL.createObjectURL(await res.blob())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `attempt${f.attemptNumber ?? 'x'}-${f.savedAt.replace(/[:.]/g, '-').slice(0, 19)}.${f.type === 'mstate' ? 'state' : f.type}`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 30000)
+    } catch (err) {
+      setError(`Download failed: ${err.message}`)
+    }
+  }
   const fileRef = useRef(null)
   const navigate = useNavigate()
 
@@ -68,6 +154,7 @@ export default function LobbyHome() {
       if (g.length) setGameId(g.find((x) => x.id === 'emerald')?.id || g[0].id)
     }).catch(() => {})
     refresh()
+    loadHistory()
     const t = setInterval(refresh, 15000)
     return () => clearInterval(t)
   }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -135,17 +222,21 @@ export default function LobbyHome() {
 
   return (
     <div className="app-shell">
+      {tourOpen && <Tour steps={TOUR_STEPS} onClose={closeTour} />}
       <div className="run-header">
         <div className="run-title">
           <h1>{me.lobby.name}</h1>
           <div className="sub">You are <strong>{me.member.name}</strong> · {me.members.length} runner{me.members.length === 1 ? '' : 's'}</div>
         </div>
         <div className="stat-tiles">
-          <button className="chip" onClick={() => copy(inviteUrl, 'invite')}>
+          <button className="chip" data-tour="invite-link" onClick={() => copy(inviteUrl, 'invite')}>
             {copied === 'invite' ? <><Check size={13} /> Copied!</> : <><Link2 size={13} /> Copy invite link</>}
           </button>
-          <button className="chip" onClick={() => copy(myUrl, 'personal')}>
+          <button className="chip" data-tour="secret-link" onClick={() => copy(myUrl, 'personal')}>
             {copied === 'personal' ? <><Check size={13} /> Copied!</> : <><KeyRound size={13} /> Copy my secret link</>}
+          </button>
+          <button className="chip" onClick={() => setTourOpen(true)} title="Replay the walkthrough">
+            <HelpCircle size={13} /> Tour
           </button>
           <span className="chip" title={me.publicUrl ? `Links copy with the public tunnel address: ${me.publicUrl}` : 'No tunnel running — links copy with this browser\'s address and may not work for others. Start the tunnel from the admin dashboard.'}>
             {me.publicUrl ? '🌐 public links' : '⚠ local links'}
@@ -156,7 +247,7 @@ export default function LobbyHome() {
 
       <div className="home-grid">
         <div className="dash-col">
-          <div className="panel">
+          <div className="panel" data-tour="attempts">
             <h2><span className="h2-title"><Trophy size={14} /> Your attempts</span></h2>
             {active ? (
               <div className="run-card">
@@ -213,7 +304,7 @@ export default function LobbyHome() {
             )}
           </div>
 
-          <div className="panel">
+          <div className="panel" data-tour="rom">
             <h2>
               <span className="h2-title"><Gamepad2 size={14} /> Lobby ROM</span>
               <span className="h-actions">
@@ -237,7 +328,8 @@ export default function LobbyHome() {
           </div>
         </div>
 
-        <div className="panel">
+        <div className="dash-col">
+        <div className="panel" data-tour="runners">
           <h2><span className="h2-title"><Users size={14} /> Runners</span></h2>
           {regenLink && (
             <div className="warn-note ok" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
@@ -280,6 +372,43 @@ export default function LobbyHome() {
               )}
             </div>
           ))}
+        </div>
+
+        <div className="panel" data-tour="history">
+          <h2>
+            <span className="h2-title"><History size={14} /> Backup history</span>
+            <span className="h-actions">
+              <button className="small" onClick={loadHistory}><RefreshCw size={12} /> Refresh</button>
+            </span>
+          </h2>
+          {!history || history.files.length === 0 ? (
+            <p className="empty-note">No backups yet — they appear automatically every time you save in-game.</p>
+          ) : (
+            <>
+              <p className="map-tip" style={{ marginTop: 0 }}>
+                {history.files.length} file{history.files.length === 1 ? '' : 's'} ·
+                {' '}{(history.totalSize / 1048576).toFixed(1)} MB of {(history.cap / 1073741824).toFixed(0)} GB —
+                oldest are pruned automatically. The newest pair is what the game auto-resumes from.
+              </p>
+              <div className="hist-list">
+                {history.files.slice(0, histShown).map((f) => (
+                  <div className="hist-row" key={f.file}>
+                    <span className="hist-main">
+                      Attempt #{f.attemptNumber ?? '?'} · <code>{f.type === 'mstate' ? '.state (manual)' : `.${f.type}`}</code>
+                    </span>
+                    <span className="hist-meta">{new Date(f.savedAt).toLocaleString()} · {(f.size / 1024).toFixed(0)} KB</span>
+                    <button className="small" title="Download" onClick={() => downloadHistoryFile(f)}><Download size={12} /></button>
+                  </div>
+                ))}
+              </div>
+              {history.files.length > histShown && (
+                <button className="small" style={{ marginTop: 6 }} onClick={() => setHistShown((n) => n + 25)}>
+                  Show more ({history.files.length - histShown} hidden)
+                </button>
+              )}
+            </>
+          )}
+        </div>
         </div>
       </div>
     </div>

@@ -31,6 +31,7 @@ export default function Landing() {
     try {
       const { memberToken } = await api.post('/api/lobbies', { lobbyName, runnerName })
       rememberLink(memberToken, `${runnerName} @ ${lobbyName}`)
+      try { localStorage.setItem('nuz-tour-pending', '1') } catch { /* private mode */ }
       navigate(`/m/${memberToken}`)
     } catch (err) {
       setError(err.message)

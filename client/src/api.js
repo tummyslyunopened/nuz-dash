@@ -7,6 +7,11 @@ async function handle(res) {
   return res.json()
 }
 
+// Per-tab session id: lets the server enforce that only ONE live session
+// pushes save data for a run (prevents branching save lineages).
+export const sessionId = crypto.randomUUID()
+export const sessionHeaders = () => ({ 'X-Nuz-Session': sessionId })
+
 // Member token: personal secret from the /m/<token> URL — it IS the auth.
 export let memberToken = null
 export const setMemberToken = (t) => { memberToken = t || null }

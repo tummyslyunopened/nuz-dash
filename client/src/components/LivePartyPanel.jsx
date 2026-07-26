@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { HeartPulse, RefreshCw, FileUp } from 'lucide-react'
-import { spriteUrl, titleCase } from '../api.js'
+import { spriteUrl, titleCase, authHeaders, sessionHeaders } from '../api.js'
 import { parseGen3Save } from '../gen3save.js'
 import { loadIndex } from './PokemonSearch.jsx'
 import { readEmulatorSave, emulatorRunning, pushAutoState } from './EmulatorPanel.jsx'
@@ -12,7 +12,7 @@ const hpClass = (hp, maxHp) => {
   return pct > 0.5 ? 'hp-good' : pct > 0.2 ? 'hp-warn' : 'hp-crit'
 }
 
-export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, onParty }) {
+export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, onParty, onAutoCaught }) {
   const [party, setParty] = useState(null)
   const [game, setGame] = useState('')
   const [source, setSource] = useState('')
@@ -62,6 +62,15 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
       (m) => m.hp === 0 && prev[m.personality] && prev[m.personality].hp > 0
     )
     if (newlyFainted.length) setFainted((f) => [...f, ...newlyFainted])
+    // Auto-annotate catches: a caught wild mon keeps its personality, so a new
+    // party member matching an auto-logged encounter flips it to "caught".
+    if (Object.keys(prev).length && onAutoCaught) {
+      for (const m of parsed.party) {
+        if (prev[m.personality]) continue
+        const match = encounters.find((e) => e.personality && e.personality === m.personality && e.status !== 'caught')
+        if (match) onAutoCaught(match, m)
+      }
+    }
     const snapshot = {}
     for (const m of parsed.party) snapshot[m.personality] = m
     prevRef.current = snapshot
@@ -81,20 +90,41 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
     setTimeout(() => URL.revokeObjectURL(url), 30000)
   }
 
-  // Every in-game save bumps the save counter — back up the battery save
-  // (.srm, same raw bytes as .sav) plus a fresh .state to the browser's
-  // downloads so there's always a local recovery point.
+  // Push the server pair (auto state + battery save). Runs on every detected
+  // in-game save AND once at session start, so a save made before the app was
+  // watching is never lost.
+  const pushServerPair = (savBytes) => {
+    if (!run?.id || window.__nuzSessionLost) return
+    pushAutoState(run.id)
+    fetch(`/api/runs/${run.id}/sav`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', ...authHeaders(), ...sessionHeaders() },
+      body: savBytes
+    }).then((res) => {
+      if (res.status === 409) {
+        window.__nuzSessionLost = true
+        window.dispatchEvent(new Event('nuz:session-lost'))
+      }
+    }).catch(() => {})
+  }
+
+  // Every in-game save bumps the save counter — refresh the server pair
+  // (FIRST, so nothing can block it). Local .state downloads only when the
+  // host has enabled them in the admin dashboard.
   const backupNow = (savBytes, saveIndex) => {
+    pushServerPair(savBytes)
+    if (!window.__nuzLocalDownloads) {
+      setBackupMsg(`In-game save #${saveIndex} detected — server auto-save updated.`)
+      return
+    }
     try {
       const stampStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
       const slug = (run?.name || 'run').replace(/[^a-z0-9-]+/gi, '_').slice(0, 30)
-      downloadBlob(savBytes, `${slug}-save${saveIndex}-${stampStr}.srm`)
       const gm = window.EJS_emulator?.gameManager
       if (gm) downloadBlob(gm.getState(), `${slug}-save${saveIndex}-${stampStr}.state`)
-      if (run?.id) pushAutoState(run.id) // refresh the server's auto-resume state too
-      setBackupMsg(`In-game save #${saveIndex} detected — downloaded .srm + .state backups and updated the server auto state.`)
+      setBackupMsg(`In-game save #${saveIndex} detected — server auto-save updated, .state backup downloaded.`)
     } catch (err) {
-      setBackupMsg(`Auto-backup failed: ${err.message}`)
+      setBackupMsg(`Server auto-save updated; local .state download failed: ${err.message}`)
     }
   }
 
@@ -105,7 +135,13 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
       applyParsed(parsed, 'emulator save')
       const prev = lastSaveIndexRef.current
       lastSaveIndexRef.current = parsed.saveIndex
-      if (prev !== null && parsed.saveIndex > prev) backupNow(bytes, parsed.saveIndex)
+      if (prev === null) {
+        // Session baseline: seed the server pair silently — the save we just
+        // observed may be newer than (or missing from) the server's copy.
+        pushServerPair(bytes)
+      } else if (parsed.saveIndex > prev) {
+        backupNow(bytes, parsed.saveIndex)
+      }
     } catch (err) {
       setError(err.message)
     }
@@ -113,11 +149,25 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
 
   useEffect(() => {
     if (!auto) return
+    // Fast poll: this drives faint alerts, auto-caught flips, and save
+    // detection — all cheap local work (SRAM flush + 128KB parse).
     const t = setInterval(() => {
       if (emulatorRunning()) syncFromEmulator()
-    }, 10000)
+    }, 3000)
     return () => clearInterval(t)
   }, [auto]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync immediately when memory is rewritten out-of-band: boot-time battery
+  // restore, or the user loading a state/save from the emulator menu.
+  useEffect(() => {
+    const h = () => setTimeout(() => { if (emulatorRunning()) syncFromEmulator() }, 400)
+    window.addEventListener('nuz:sav-restored', h)
+    window.addEventListener('nuz:memory-reset', h)
+    return () => {
+      window.removeEventListener('nuz:sav-restored', h)
+      window.removeEventListener('nuz:memory-reset', h)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const syncFromFile = async (file) => {
     try {
@@ -159,7 +209,7 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
         <span className="h2-title"><HeartPulse size={14} /> Live party</span> <span style={{ textTransform: 'none', letterSpacing: 0 }}>{game && `· ${game}`}</span>
         <span className="h-actions">
           <label style={{ fontSize: 12, display: 'inline-flex', gap: 5, alignItems: 'center', textTransform: 'none', letterSpacing: 0 }}>
-            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto (10s)
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto (3s)
           </label>
           <button className="small" onClick={() => fileRef.current?.click()} title="Parse a .sav file from any emulator"><FileUp size={12} /> Load .sav</button>
           <button className="small primary" onClick={syncFromEmulator}><RefreshCw size={12} /> Sync from game</button>
@@ -235,8 +285,8 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
       {backupMsg && <p className="map-tip">{backupMsg}</p>}
       {source && (
         <p className="map-tip">
-          Last synced from {source}. The party reflects your last in-game save. Each new in-game save auto-downloads
-          .srm + .state backups (allow "download multiple files" if the browser asks; rename .srm to .sav for mGBA).
+          Last synced from {source}. The party reflects your last in-game save. Each new in-game save updates the
+          server auto-save you resume from{window.__nuzLocalDownloads ? ' and downloads a .state backup' : ''}.
         </p>
       )}
     </div>

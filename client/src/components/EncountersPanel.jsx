@@ -21,6 +21,7 @@ export default function EncountersPanel({ run, encounters, setEncounters, locati
   const [shiny, setShiny] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [editingLoc, setEditingLoc] = useState(null) // encounter id being location-annotated
 
   // Prefill from the live-party "import" button in the emulator view
   useEffect(() => {
@@ -166,6 +167,7 @@ export default function EncountersPanel({ run, encounters, setEncounters, locati
       {visible.length === 0 ? (
         <p className="empty-note">Nothing here yet.</p>
       ) : (
+        <div className="table-scroll">
         <table className="enc-table">
           <thead>
             <tr><th>Pokemon</th><th>Location</th><th>Lv.</th><th>Status</th><th></th></tr>
@@ -191,9 +193,34 @@ export default function EncountersPanel({ run, encounters, setEncounters, locati
                       </div>
                     </div>
                   </td>
-                  <td>{enc.location}</td>
+                  <td onClick={() => { if (editingLoc !== enc.id) setEditingLoc(enc.id) }} style={{ cursor: 'pointer' }}>
+                    {editingLoc === enc.id ? (
+                      <input
+                        autoFocus
+                        list="location-options"
+                        defaultValue={enc.location}
+                        style={{ width: 130, padding: '3px 8px' }}
+                        onBlur={(e) => { setEditingLoc(null); if (e.target.value.trim() !== enc.location) update(enc.id, { location: e.target.value.trim() }) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setEditingLoc(null) }}
+                      />
+                    ) : (
+                      enc.location || <span className="unannotated">＋ location</span>
+                    )}
+                  </td>
                   <td className="mono">{enc.level ?? '—'}</td>
-                  <td><span className={`status-badge ${meta.cls}`}>{meta.icon} {meta.label}</span></td>
+                  <td>
+                    <select
+                      className={`status-select ${meta.cls}`}
+                      value={enc.status}
+                      onChange={(e) => update(enc.id, { status: e.target.value })}
+                      title="Change encounter outcome"
+                    >
+                      <option value="caught">● Caught</option>
+                      <option value="killed">✖ Killed</option>
+                      <option value="fled">→ Fled</option>
+                      <option value="missed">○ Missed</option>
+                    </select>
+                  </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {enc.status === 'caught' && enc.alive && (
                       <button className="small" onClick={() => markDead(enc)} title="Mark as dead">☠</button>
@@ -209,6 +236,7 @@ export default function EncountersPanel({ run, encounters, setEncounters, locati
             })}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )

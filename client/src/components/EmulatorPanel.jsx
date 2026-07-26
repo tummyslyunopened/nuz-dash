@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Gamepad2, Radio, Play, Save, Download, Upload } from 'lucide-react'
-import { authHeaders, memberToken } from '../api.js'
+import { Gamepad2, Radio, Play, Upload, Maximize, X } from 'lucide-react'
+import { authHeaders, memberToken, sessionHeaders } from '../api.js'
+
+// "Mobile" = touch device with a small screen (a touch laptop shouldn't count)
+const isMobile = () => window.matchMedia('(pointer: coarse) and (max-width: 900px)').matches
 
 // Pull the current battery save out of the running EmulatorJS instance.
 // API surface differs slightly between versions, so probe defensively.
@@ -27,15 +30,21 @@ export const emulatorRunning = () => !!window.EJS_emulator?.gameManager
 // Push the current emulator state to the server's rolling "auto" slot.
 // Called on detected in-game saves and on a heartbeat while playing.
 export async function pushAutoState(runId) {
+  if (window.__nuzSessionLost) return null
   const gm = window.EJS_emulator?.gameManager
   if (!gm) return null
   try {
     const bytes = gm.getState()
     const res = await fetch(`/api/runs/${runId}/states/auto`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream', ...authHeaders() },
+      headers: { 'Content-Type': 'application/octet-stream', ...authHeaders(), ...sessionHeaders() },
       body: bytes
     })
+    if (res.status === 409) {
+      window.__nuzSessionLost = true
+      window.dispatchEvent(new Event('nuz:session-lost'))
+      return null
+    }
     return res.ok ? await res.json() : null
   } catch {
     return null
@@ -44,21 +53,56 @@ export async function pushAutoState(runId) {
 
 const fmtSize = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`)
 
-const timeAgo = (iso) => {
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.round(mins / 60)
-  return hours < 24 ? `${hours}h ago` : new Date(iso).toLocaleString()
-}
-
 export default function EmulatorPanel({ run, setRun }) {
   const [started, setStarted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [stateMsg, setStateMsg] = useState('')
   const [streaming, setStreaming] = useState(true)
+  const [mobileFs, setMobileFs] = useState(false)
   const fileRef = useRef(null)
+  const mountWrapRef = useRef(null)
+
+  // Mobile fullscreen: CSS takeover everywhere (iPhone has no element
+  // fullscreen API), plus native fullscreen + landscape lock where supported.
+  // The emulator only notices size changes via window resize, so nudge it.
+  const nudgeEmulatorResize = () => setTimeout(() => window.dispatchEvent(new Event('resize')), 60)
+
+  // Fullscreen state is broadcast so the encounter radar can portal detection
+  // toasts INTO the wrapper (native fullscreen only renders its descendants).
+  const setFsBroadcast = (active) => {
+    window.__nuzMobileFs = active
+    window.dispatchEvent(new CustomEvent('nuz:mobile-fs', { detail: active }))
+  }
+
+  const enterMobileFullscreen = () => {
+    setMobileFs(true)
+    setFsBroadcast(true)
+    const el = mountWrapRef.current
+    if (el?.requestFullscreen) {
+      el.requestFullscreen().then(() => {
+        try { screen.orientation?.lock?.('landscape').catch(() => {}) } catch { /* not supported */ }
+      }).catch(() => { /* CSS takeover still applies */ })
+    }
+    nudgeEmulatorResize()
+  }
+
+  const exitMobileFullscreen = () => {
+    setMobileFs(false)
+    setFsBroadcast(false)
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
+    try { screen.orientation?.unlock?.() } catch { /* fine */ }
+    nudgeEmulatorResize()
+  }
+
+  // Let other components (radar toasts) request a fullscreen exit
+  const exitRef = useRef(() => {})
+  exitRef.current = exitMobileFullscreen
+  useEffect(() => {
+    const h = () => exitRef.current()
+    window.addEventListener('nuz:exit-mobile-fs', h)
+    return () => window.removeEventListener('nuz:exit-mobile-fs', h)
+  }, [])
 
   // Controller bindings follow the member: watch the live mapping while
   // playing and push changes to the server (loaded back at game start).
@@ -82,32 +126,73 @@ export default function EmulatorPanel({ run, setRun }) {
     return () => clearInterval(t)
   }, [started])
 
-  // Heartbeat: refresh the server's auto state every 3 minutes while playing
-  useEffect(() => {
-    if (!started) return
-    const t = setInterval(async () => {
-      const updated = await pushAutoState(run.id)
-      if (updated) setRun(updated)
-    }, 180000)
-    return () => clearInterval(t)
-  }, [started, run.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Auto-resume: restore the battery save FIRST (savestates don't reliably
+  // include SRAM — without this the party scanner starves until the first
+  // in-game save), then load the server auto state.
+  const restoreBatterySave = async (gm) => {
+    const savRes = await fetch(`/api/runs/${run.id}/sav`, { headers: authHeaders() })
+    if (!savRes.ok) return false
+    const bytes = new Uint8Array(await savRes.arrayBuffer())
+    const p = gm.getSaveFilePath()
+    const parts = p.split('/')
+    let cur = ''
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!parts[i]) continue
+      cur += '/' + parts[i]
+      if (!gm.FS.analyzePath(cur).exists) gm.FS.mkdir(cur)
+    }
+    try { gm.FS.unlink(p) } catch { /* fresh */ }
+    gm.FS.writeFile(p, bytes)
+    if (typeof gm.loadSaveFiles === 'function') gm.loadSaveFiles()
+    window.dispatchEvent(new Event('nuz:sav-restored')) // party panel syncs immediately
+    return true
+  }
 
-  // Auto-resume: when the game starts, load the NEWEST server-side state
-  // (auto or manual slot). Manual loads remain available at any time.
+  // Resume policy: battery save ONLY. States are convenience artifacts
+  // (history/manual); the sav is the source of truth and boots like real
+  // hardware — title screen, Continue at the last in-game save.
   const autoResume = async () => {
     try {
-      const fresh = await fetch(`/api/runs/${run.id}`, { headers: authHeaders() }).then((r) => r.json())
-      const slots = Object.entries(fresh.states || {})
-      if (!slots.length) return
-      const [slot, meta] = slots.sort((a, b) => b[1].savedAt.localeCompare(a[1].savedAt))[0]
-      const res = await fetch(`/api/runs/${run.id}/states/${slot}`, { headers: authHeaders() })
-      if (!res.ok) return
       const gm = window.EJS_emulator?.gameManager
       if (!gm) return
-      gm.loadState(new Uint8Array(await res.arrayBuffer()))
-      setStateMsg(`Resumed from server state (${slot === 'auto' ? 'auto' : `slot ${slot}`}, saved ${timeAgo(meta.savedAt)}).`)
+      const restored = await restoreBatterySave(gm)
+      if (restored) setStateMsg('Battery save restored from the server — hit Continue on the title screen to resume.')
     } catch { /* fresh boot is fine */ }
   }
+
+  // ---- Single-session guard: only one live tab/device syncs a run ----
+  const [sessionLost, setSessionLost] = useState(false)
+
+  const claimSession = async (takeover) => {
+    const res = await fetch(`/api/runs/${run.id}/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...sessionHeaders() },
+      body: JSON.stringify({ takeover: !!takeover })
+    })
+    return res.status
+  }
+
+  const loseSession = () => {
+    window.__nuzSessionLost = true
+    setSessionLost(true)
+    try { window.EJS_emulator?.pause?.(true) } catch { /* best effort */ }
+  }
+
+  useEffect(() => {
+    const h = () => loseSession()
+    window.addEventListener('nuz:session-lost', h)
+    return () => window.removeEventListener('nuz:session-lost', h)
+  }, [])
+
+  useEffect(() => {
+    if (!started || sessionLost) return
+    const t = setInterval(async () => {
+      try {
+        if ((await claimSession(false)) === 409) loseSession()
+      } catch { /* offline blip; retry next beat */ }
+    }, 10000)
+    return () => clearInterval(t)
+  }, [started, sessionLost, run.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Watch-party broadcast: copy the emulator canvas to JPEG (~2fps) and push
   // the latest frame to the server for lobby-mates to watch. drawImage runs
@@ -141,40 +226,6 @@ export default function EmulatorPanel({ run, setRun }) {
     return () => clearInterval(t)
   }, [started, streaming, run.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveState = async (slot) => {
-    setStateMsg('')
-    try {
-      const gm = window.EJS_emulator?.gameManager
-      if (!gm) throw new Error('game is not running')
-      const bytes = gm.getState()
-      const res = await fetch(`/api/runs/${run.id}/states/${slot}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream', ...authHeaders() },
-        body: bytes
-      })
-      if (!res.ok) throw new Error((await res.json()).error || `${res.status}`)
-      setRun(await res.json())
-      setStateMsg(`Saved to slot ${slot} (${(bytes.length / 1024).toFixed(0)} KB).`)
-    } catch (err) {
-      setStateMsg(`Save failed: ${err.message}`)
-    }
-  }
-
-  const loadState = async (slot) => {
-    setStateMsg('')
-    try {
-      const gm = window.EJS_emulator?.gameManager
-      if (!gm) throw new Error('game is not running')
-      const res = await fetch(`/api/runs/${run.id}/states/${slot}`, { headers: authHeaders() })
-      if (res.status === 404) throw new Error('slot is empty')
-      if (!res.ok) throw new Error(`${res.status}`)
-      gm.loadState(new Uint8Array(await res.arrayBuffer()))
-      setStateMsg(`Loaded slot ${slot}. If the encounter radar is running, Stop/Start it and re-sync the party — memory moved.`)
-    } catch (err) {
-      setStateMsg(`Load failed: ${err.message}`)
-    }
-  }
-
   const upload = async (file) => {
     setBusy(true)
     setError('')
@@ -203,13 +254,95 @@ export default function EmulatorPanel({ run, setRun }) {
     setRun(await res.json())
   }
 
+  // Browsers only surface the "allow multiple downloads" permission when a
+  // second programmatic download happens — there's no API to request it.
+  // So we provoke the prompt ONCE, here inside the Start tap (before
+  // fullscreen), so it never interrupts gameplay later.
+  // Returns true when it primed (first ever start): the emulator does NOT
+  // boot on that click, so the permission prompt can never collide with
+  // fullscreen. The user answers it, then presses Start again.
+  const primeDownloadPermission = () => {
+    if (!window.__nuzLocalDownloads) return false // downloads disabled server-side: nothing to prime
+    if (localStorage.getItem('nuz-dl-primed')) return false
+    localStorage.setItem('nuz-dl-primed', '1')
+    const msg = 'Nuz-Dash download-permission check. Automatic save backups need this. Safe to delete.'
+    for (const n of [1, 2]) {
+      const url = URL.createObjectURL(new Blob([msg], { type: 'text/plain' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `nuz-dash-backup-check-${n}.txt`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+    }
+    setStateMsg('One-time download check: if the browser asks to allow multiple downloads, choose Allow — then press Start game again. (The two tiny check files are safe to delete.)')
+    return true
+  }
+
+  // Detect emulator-menu loads (state or save file) by patching gameManager —
+  // the EJS_onLoad* events can't be used: registering them SUPPRESSES the
+  // menu's default load behavior. A load rewrites memory, so the party
+  // scanner and radar re-baseline immediately via this event.
+  const patchLoadHooks = () => {
+    const gm = window.EJS_emulator?.gameManager
+    if (!gm || gm.__nuzPatched) return
+    gm.__nuzPatched = true
+    const fireReset = () => setTimeout(() => window.dispatchEvent(new Event('nuz:memory-reset')), 600)
+    const origLoadState = gm.loadState.bind(gm)
+    gm.loadState = (d) => { const r = origLoadState(d); fireReset(); return r }
+    const origLoadSaves = gm.loadSaveFiles.bind(gm)
+    gm.loadSaveFiles = () => { const r = origLoadSaves(); fireReset(); return r }
+  }
+
   const start = async () => {
+    if (primeDownloadPermission()) return // answer the prompt first, then tap Start again
+    // RULE: every prompt (confirm/permission) must resolve BEFORE entering
+    // mobile fullscreen — a dialog over fullscreen breaks it. Keep the awaits
+    // here short so the tap's activation still covers the fullscreen request;
+    // if native fullscreen is denied anyway, the CSS takeover still applies.
+    try {
+      if ((await claimSession(false)) === 409) {
+        if (!window.confirm('This run is already being played in another tab or device. Take over here? (The other session will stop syncing saves.)')) return
+        await claimSession(true)
+      }
+      window.__nuzSessionLost = false
+      setSessionLost(false)
+    } catch { /* offline: play on, guard re-engages when the server is back */ }
+    if (isMobile()) enterMobileFullscreen()
     // Seed the emulator with this member's saved controller bindings
     try {
       const me = await fetch('/api/me', { headers: authHeaders() }).then((r) => r.json())
       if (me?.member?.controls) window.EJS_defaultControls = me.member.controls
+      window.__nuzLocalDownloads = !!me?.localDownloads
     } catch { /* built-in defaults are fine */ }
-    window.EJS_onGameStart = () => setTimeout(autoResume, 1200)
+    window.EJS_onGameStart = () => setTimeout(() => { patchLoadHooks(); autoResume() }, 1200)
+    // Emulator-menu manual states: registering this handler REPLACES the
+    // default flow, so we do both jobs — local download + server archive.
+    window.EJS_onSaveState = (e) => {
+      const bytes = e?.state
+      if (!bytes || !bytes.length) return
+      if (window.__nuzLocalDownloads) {
+        try {
+          const url = URL.createObjectURL(new Blob([bytes]))
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `manual-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.state`
+          a.click()
+          setTimeout(() => URL.revokeObjectURL(url), 30000)
+        } catch { /* download is best-effort */ }
+      }
+      if (!window.__nuzSessionLost) {
+        fetch(`/api/runs/${run.id}/manual-state`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream', ...authHeaders(), ...sessionHeaders() },
+          body: bytes
+        }).catch(() => {})
+      }
+      setStateMsg(window.__nuzLocalDownloads
+        ? 'Manual state saved — downloaded locally and archived to your backup history.'
+        : 'Manual state saved — archived to your backup history.')
+    }
+    // Keep the FS save file fresh even if our auto-sync is toggled off
+    window.EJS_defaultOptions = { 'save-save-interval': '30' }
     window.EJS_player = '#ejs-mount'
     window.EJS_core = run.rom.core
     window.EJS_gameName = run.rom.name.replace(/\.[^.]+$/, '')
@@ -231,6 +364,11 @@ export default function EmulatorPanel({ run, setRun }) {
         <span className="h2-title"><Gamepad2 size={14} /> Game</span>
         {run.rom && (
           <span className="h-actions">
+            {started && isMobile() && (
+              <button className="small" onClick={enterMobileFullscreen} title="Fullscreen">
+                <Maximize size={12} />
+              </button>
+            )}
             {started && (
               <button
                 className={`small ${streaming ? 'primary' : ''}`}
@@ -238,7 +376,9 @@ export default function EmulatorPanel({ run, setRun }) {
                 title="Broadcast your game to lobby-mates"
               ><Radio size={12} /> {streaming ? 'Streaming' : 'Stream off'}</button>
             )}
-            <span className="chip">{run.rom.name} · {fmtSize(run.rom.size)} · {run.rom.core.toUpperCase()}</span>
+            <span className="chip rom-chip" title={`${run.rom.name} · ${fmtSize(run.rom.size)} · ${run.rom.core.toUpperCase()}`}>
+              {run.rom.name} · {fmtSize(run.rom.size)} · {run.rom.core.toUpperCase()}
+            </span>
             <button className="small" onClick={() => fileRef.current?.click()} disabled={busy || started}>Replace</button>
             <button className="small danger" onClick={removeRom} disabled={busy}>Remove</button>
           </span>
@@ -267,37 +407,27 @@ export default function EmulatorPanel({ run, setRun }) {
               <button className="primary" onClick={start}><Play size={14} /> Start game</button>
             </div>
           )}
-          <div id="ejs-mount" className="ejs-mount" style={{ display: started ? 'block' : 'none' }} />
-          {started && (
-            <>
-              <div className="state-slots">
-                <div className="state-slot" key="auto">
-                  <span className="ss-label">
-                    Auto
-                    <span className="ss-meta">{run.states?.auto ? ` · ${timeAgo(run.states.auto.savedAt)}` : ' · none yet'}</span>
-                  </span>
-                  <button className="small" onClick={() => loadState('auto')} disabled={!run.states?.auto}><Download size={12} /> Load</button>
+          <div ref={mountWrapRef} id="ejs-wrap" className={`ejs-wrap ${mobileFs ? 'mobile-fs' : ''}`}>
+            <div id="ejs-mount" className="ejs-mount" style={{ display: started ? 'block' : 'none' }} />
+            {mobileFs && (
+              <button className="fs-exit" onClick={exitMobileFullscreen} title="Exit fullscreen"><X size={18} /></button>
+            )}
+            {sessionLost && (
+              <div className="session-lost">
+                <div>
+                  <h3>Session taken over</h3>
+                  <p>This run started playing on another tab or device, so this one stopped syncing saves to avoid conflicting timelines.</p>
+                  <button className="primary" onClick={() => window.location.reload()}>Reload to take back</button>
                 </div>
-                {['1', '2', '3'].map((slot) => {
-                  const meta = run.states?.[slot]
-                  return (
-                    <div className="state-slot" key={slot}>
-                      <span className="ss-label">
-                        Slot {slot}
-                        <span className="ss-meta">{meta ? ` · ${timeAgo(meta.savedAt)}` : ' · empty'}</span>
-                      </span>
-                      <button className="small" onClick={() => saveState(slot)}><Save size={12} /> Save</button>
-                      <button className="small" onClick={() => loadState(slot)} disabled={!meta}><Download size={12} /> Load</button>
-                    </div>
-                  )
-                })}
               </div>
-              {stateMsg && <p className="map-tip">{stateMsg}</p>}
-              <p className="map-tip">
-                The Auto slot updates on every in-game save (plus every 3 minutes) and resumes automatically when you start the game.
-                Manual slots and local .srm/.state downloads are your explicit checkpoints.
-              </p>
-            </>
+            )}
+          </div>
+          {stateMsg && <p className="map-tip">{stateMsg}</p>}
+          {started && (
+            <p className="map-tip">
+              Progress resumes automatically: every in-game save updates the server auto-save, which loads on your
+              next launch. Manual save states live in the emulator's own menu.
+            </p>
           )}
         </>
       )}

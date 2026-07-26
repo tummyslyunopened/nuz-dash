@@ -62,6 +62,19 @@ export default function RunPage() {
     setEncounters((es) => es.map((e) => (e.id === enc.id ? updated : e)))
   }
 
+  // Radar auto-logged this mon and it just appeared in the synced party
+  const autoCaught = async (enc, mon) => {
+    try {
+      const updated = await api.put(`/api/encounters/${enc.id}`, {
+        status: 'caught',
+        alive: true,
+        nickname: mon.nickname || enc.nickname,
+        level: mon.level ?? enc.level
+      })
+      setEncounters((es) => es.map((e) => (e.id === enc.id ? updated : e)))
+    } catch { /* next sync retries the match */ }
+  }
+
   const importFromGame = (mon) => {
     setPrefill({
       key: Date.now(),
@@ -155,8 +168,6 @@ export default function RunPage() {
               run={run}
               encounters={encounters}
               party={lastParty}
-              locations={locations}
-              onPrefill={importFromGame}
               onLogged={(enc) => setEncounters((es) => [...es, enc])}
             />
             <LivePartyPanel
@@ -165,6 +176,7 @@ export default function RunPage() {
               onMarkDead={markEncounterDead}
               onImport={importFromGame}
               onParty={setLastParty}
+              onAutoCaught={autoCaught}
             />
           </div>
           <div className="dash-col" style={{ display: view === 'dash' ? 'flex' : 'none' }}>

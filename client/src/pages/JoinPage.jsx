@@ -21,6 +21,7 @@ export default function JoinPage() {
     try {
       const { memberToken } = await api.post(`/api/join/${invite}`, { name })
       rememberLink(memberToken, `${name} @ ${lobbyName}`)
+      try { localStorage.setItem('nuz-tour-pending', '1') } catch { /* private mode */ }
       navigate(`/m/${memberToken}`)
     } catch (err) {
       setError(err.message)

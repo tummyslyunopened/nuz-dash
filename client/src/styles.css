@@ -134,6 +134,14 @@ label:where(:not(#ejs-mount *)) { color: var(--text-2); }
   padding: 3px 10px;
 }
 .chip.on { border-color: var(--accent); color: var(--text); }
+.rom-chip {
+  display: inline-block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
 
 /* ---------- Dashboard grid ---------- */
 .dash-grid {
@@ -364,6 +372,81 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
   overflow: hidden;
 }
 
+/* Mobile fullscreen takeover for the emulator */
+.ejs-wrap { position: relative; }
+.ejs-wrap.mobile-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: #000;
+}
+.ejs-wrap.mobile-fs .ejs-mount {
+  width: 100%;
+  height: 100dvh;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+/* Encounter toasts over the fullscreen emulator */
+.fs-toasts {
+  position: absolute;
+  top: calc(52px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 320;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(94vw, 420px);
+}
+.fs-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(22, 18, 31, 0.93);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
+  animation: toast-in 0.25s ease;
+}
+.fs-toast img { width: 40px; height: 40px; image-rendering: pixelated; flex: none; }
+.fs-toast .ft-text { flex: 1; min-width: 0; font-size: 13.5px; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+
+.session-lost {
+  position: absolute;
+  inset: 0;
+  z-index: 330;
+  background: rgba(5, 3, 10, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px;
+}
+.session-lost h3 { margin: 0 0 8px; }
+.session-lost p { color: var(--text-2); font-size: 13.5px; max-width: 380px; margin: 0 auto 14px; }
+
+.fs-exit {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  /* offset left so it clears the emulator's own top-right menu button */
+  right: calc(64px + env(safe-area-inset-right));
+  z-index: 310;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(22, 18, 31, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+}
+
 .state-slots { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .state-slot {
   display: flex;
@@ -402,6 +485,36 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 .hp-fill.hp-warn { background: var(--warning); }
 .hp-fill.hp-crit { background: var(--critical); }
 .faint-alert { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+
+.unannotated { color: var(--warning); font-size: 12px; white-space: nowrap; }
+.status-select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.hist-list { display: flex; flex-direction: column; }
+.hist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12.5px;
+}
+.hist-row:last-child { border-bottom: none; }
+.hist-row .hist-main { white-space: nowrap; }
+.hist-row .hist-meta { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+
+.radar-recent { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.rr-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.rr-row img { width: 32px; height: 32px; image-rendering: pixelated; }
+.rr-noimg { width: 32px; text-align: center; color: var(--muted); }
+.rr-note { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+.ft-logged { color: var(--good); font-size: 12px; }
 
 .radar-card {
   display: flex;
@@ -478,6 +591,34 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
   font-size: 12.5px;
 }
 .watch-tile .wt-stats { color: var(--muted); font-size: 11.5px; }
+
+/* ---------- Tour ---------- */
+.tour-overlay { position: fixed; inset: 0; z-index: 400; }
+.tour-dim { position: absolute; inset: 0; background: rgba(5, 3, 10, 0.7); }
+.tour-highlight {
+  position: fixed;
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(5, 3, 10, 0.7), 0 0 24px rgba(139, 92, 246, 0.6);
+  transition: top 0.25s, left 0.25s, width 0.25s, height 0.25s;
+  pointer-events: none;
+}
+.tour-card {
+  position: fixed;
+  width: min(340px, calc(100vw - 24px));
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.6);
+  z-index: 401;
+}
+.tour-card.centered { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.tour-card h3 { margin: 0 0 6px; font-size: 16px; padding-right: 22px; }
+.tour-card p { margin: 0 0 12px; color: var(--text-2); font-size: 13.5px; line-height: 1.5; }
+.tour-close { position: absolute; top: 8px; right: 8px; padding: 2px 6px; border: none; background: transparent; color: var(--muted); }
+.tour-foot { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.tour-progress { color: var(--muted); font-size: 12px; margin-right: auto; }
 
 /* ---------- Bug report ---------- */
 .bug-fab {
@@ -585,3 +726,46 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 .run-card .sub { color: var(--muted); font-size: 12.5px; }
 .run-card .spacer { margin-left: auto; }
 .error-note { color: var(--critical); font-size: 13px; }
+
+/* ---------- Mobile ---------- */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll table { min-width: 480px; }
+
+@media (max-width: 640px) {
+  body { font-size: 13.5px; }
+  .app-shell { padding: 10px 10px 84px; } /* bottom room for the bug button */
+  .panel { padding: 11px 12px; }
+  .run-header { gap: 8px; margin-bottom: 10px; }
+  .run-title h1 { font-size: 18px; }
+  .view-toggle { width: 100%; display: flex; }
+  .view-toggle button { flex: 1; }
+  .stat-tiles { margin-left: 0; width: 100%; gap: 6px; flex-wrap: nowrap; }
+  .stat-tile { min-width: 0; flex: 1; padding: 6px 6px; }
+  .stat-tile .value { font-size: 19px; }
+  .stat-tile .value input { width: 46px; font-size: 18px; }
+  .stat-tile .label { font-size: 9.5px; }
+  .enc-form { grid-template-columns: 1fr; }
+  .party-grid { grid-template-columns: 1fr; }
+  .watch-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .state-slots { gap: 6px; }
+  .state-slot { flex: 1 1 45%; justify-content: space-between; }
+  .rom-chip { max-width: 90px; }
+  .panel h2 { row-gap: 4px; }
+  .panel h2 .h-actions { flex-wrap: nowrap; align-items: center; }
+  .hero { padding: 24px 8px 12px; }
+  .hero h1 { font-size: 30px; }
+  .hero .tagline { font-size: 14px; }
+  .feature-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .home-grid { gap: 10px; }
+  .dash-grid { gap: 10px; }
+  .dash-col { gap: 10px; }
+  .bug-modal { right: 10px; left: 10px; width: auto; }
+}
+
+/* Comfortable tap targets on touch devices */
+@media (pointer: coarse) {
+  button.small { padding: 7px 12px; }
+  .map-pin { width: 22px; height: 22px; font-size: 12px; }
+  .rnode circle.body { r: 26; }
+  input, select, textarea { font-size: 16px; } /* prevents iOS zoom-on-focus */
+}

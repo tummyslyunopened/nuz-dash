@@ -1,81 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Radar, ScanSearch, HardDriveDownload } from 'lucide-react'
-import { api, spriteUrl, titleCase } from '../api.js'
+import { api, spriteUrl, titleCase, authHeaders } from '../api.js'
 import { calibrate, scanEnemies, probe, deepScan, dumpHeap, findSpeciesTable, speciesTableName } from '../gen3ram.js'
 import { loadIndex } from './PokemonSearch.jsx'
 import { emulatorRunning } from './EmulatorPanel.jsx'
 
-const STATUSES = [
-  { key: 'caught', label: '● Caught' },
-  { key: 'killed', label: '✖ Killed' },
-  { key: 'fled', label: '→ Fled' },
-  { key: 'missed', label: '○ Missed' }
-]
-
-function SuggestionCard({ mon, name, run, encounters, locations, onLog, onPrefill, onDismiss }) {
-  const [location, setLocation] = useState('')
-  const [busy, setBusy] = useState(false)
-  const loc = location.trim()
-  const locationUsed = loc && encounters.some((e) => e.location.toLowerCase() === loc.toLowerCase())
-  const speciesSeen = mon.nationalId && encounters.some((e) => e.speciesId === mon.nationalId)
-
-  return (
-    <div className="radar-card">
-      <img src={mon.nationalId ? spriteUrl(mon.nationalId, mon.shiny) : null} alt="" />
-      <div className="rc-body">
-        <div className="rc-title">
-          Wild <strong>{name ? titleCase(name) : `species #${mon.maskedSpecies ?? mon.internalSpecies}`}</strong> · Lv. {mon.level}
-          {mon.shiny && <span className="shiny-star" title="Shiny"> ✦</span>}
-        </div>
-        {name ? (
-          <>
-            <div className="rc-row">
-              <input
-                list="radar-location-options"
-                placeholder="Location…"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-              />
-              <datalist id="radar-location-options">
-                {locations.map((l) => <option key={l} value={l} />)}
-              </datalist>
-            </div>
-            {(locationUsed || (speciesSeen && run.rules.dupesClause && !(mon.shiny && run.rules.shinyClause))) && (
-              <div className="rc-warn">
-                {locationUsed && 'Location already has an encounter. '}
-                {speciesSeen && run.rules.dupesClause && !(mon.shiny && run.rules.shinyClause) && 'Species already encountered (dupes clause).'}
-              </div>
-            )}
-            <div className="rc-row rc-actions">
-              {STATUSES.map((s) => (
-                <button
-                  key={s.key}
-                  className="small"
-                  disabled={!loc || busy}
-                  onClick={async () => {
-                    setBusy(true)
-                    try { await onLog(mon, name, s.key, loc) } finally { setBusy(false) }
-                  }}
-                >{s.label}</button>
-              ))}
-            </div>
-          </>
-        ) : (
-          <div className="rc-warn">Unknown species id (ROM-hack addition?) — log it manually.</div>
-        )}
-        <div className="rc-row rc-actions">
-          <button className="small" onClick={() => onPrefill(mon, name)}>Edit in form</button>
-          <button className="small" onClick={onDismiss}>Dismiss (trainer battle / repeat)</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default function EncounterRadar({ run, encounters, party, locations, onPrefill, onLogged }) {
+export default function EncounterRadar({ run, encounters, party, onLogged }) {
   const [watching, setWatching] = useState(false)
   const [candidates, setCandidates] = useState([])
-  const [suggestions, setSuggestions] = useState([])
+  const [recent, setRecent] = useState([]) // latest auto-logged detections
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [idToName, setIdToName] = useState({})
@@ -84,6 +18,8 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
   const [scanCount, setScanCount] = useState(0)
   const [extraDeltas, setExtraDeltas] = useState([])
   const [toolMsg, setToolMsg] = useState('')
+  const [fsActive, setFsActive] = useState(() => !!window.__nuzMobileFs)
+  const [toasts, setToasts] = useState([]) // informational, over the fullscreen emulator
   const seenRef = useRef(new Set())
   const primedRef = useRef(false)
   const tableRef = useRef(null) // species-name table found in the game's memory
@@ -99,8 +35,20 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
     }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    const h = (e) => setFsActive(!!e.detail)
+    window.addEventListener('nuz:mobile-fs', h)
+    return () => window.removeEventListener('nuz:mobile-fs', h)
+  }, [])
+
+  const addToast = (mon, name) => {
+    const toast = { mon, name, id: `${mon.personality}-${Date.now()}` }
+    setToasts((t) => [...t, toast])
+    try { navigator.vibrate?.(80) } catch { /* fine */ }
+    setTimeout(() => setToasts((t) => t.filter((x) => x !== toast)), 8000)
+  }
+
   // Attach the best available species name/national id to a detected mon.
-  // Vanilla path first; otherwise the hack's own ROM name table.
   const enrich = (mon) => {
     if (mon.nationalId && idToName[mon.nationalId]) {
       return { ...mon, _name: idToName[mon.nationalId] }
@@ -117,7 +65,47 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
     return { ...mon, _name: '' }
   }
 
+  // Fully automatic: every detection is logged immediately (status "missed",
+  // no location) and annotated later in the Encounters panel. Catches flip to
+  // "caught" automatically when the mon appears in the synced party.
+  const autoLog = async (mon) => {
+    const name = mon._name || (mon.nationalId && idToName[mon.nationalId]) || ''
+    let chainId = null
+    if (name) {
+      try { chainId = (await api.get(`/api/family/${name}`)).chainId } catch { /* optional */ }
+    }
+    try {
+      const enc = await api.post(`/api/runs/${run.id}/encounters`, {
+        location: '',
+        speciesName: name || `#${mon.maskedSpecies ?? mon.internalSpecies}`,
+        speciesId: mon.nationalId ?? null,
+        chainId,
+        status: 'missed',
+        nickname: '',
+        level: mon.level,
+        shiny: mon.shiny,
+        personality: mon.personality
+      })
+      onLogged(enc)
+      setRecent((r) => [{ mon, name }, ...r].slice(0, 6))
+      if (window.__nuzMobileFs) addToast(mon, name)
+    } catch { /* server hiccup — radar keeps running */ }
+  }
+
   const stoppedByUserRef = useRef(false)
+  const doStartRef = useRef(null)
+
+  // Emulator-menu state/save loads rewrite memory — recalibrate right away
+  // instead of waiting for the recovery loop to notice.
+  useEffect(() => {
+    const h = () => {
+      if (stoppedByUserRef.current) return
+      setWatching(false)
+      setTimeout(() => doStartRef.current?.(true), 900)
+    }
+    window.addEventListener('nuz:memory-reset', h)
+    return () => window.removeEventListener('nuz:memory-reset', h)
+  }, [])
 
   const doStart = (silent) => {
     if (!silent) setError('')
@@ -139,6 +127,8 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
     }
   }
 
+  doStartRef.current = doStart
+
   const start = () => {
     stoppedByUserRef.current = false
     doStart(false)
@@ -150,9 +140,7 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
     setStatus('')
   }
 
-  // Auto-start (and auto-recover after errors or save-state loads): retry
-  // every 5s whenever we have a party anchor and a running game, unless the
-  // user explicitly pressed Stop.
+  // Auto-start (and auto-recover after errors or save-state loads)
   useEffect(() => {
     if (watching) return
     const t = setInterval(() => {
@@ -170,7 +158,7 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
         for (const raw of enemies) {
           seenRef.current.add(raw.personality)
           const mon = enrich(raw)
-          if (mon && primedRef.current) setSuggestions((s) => [...s, mon])
+          if (mon && primedRef.current) autoLog(mon)
         }
         primedRef.current = true
         setScanCount((c) => c + 1)
@@ -185,20 +173,17 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
     return () => clearInterval(t)
   }, [watching, candidates, debugOpen, extraDeltas]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // One-shot wide search — press this DURING a battle. Any valid enemy found at
-  // a non-standard offset teaches the per-second scan its delta.
+  // One-shot wide search — press this DURING a battle if a detection was missed.
   const runDeepScan = () => {
     setToolMsg('Deep scanning…')
     try {
       const results = deepScan(candidates, (pid) => seenRef.current.has(pid))
         .map((r) => ({ ...r, mon: enrich(r.mon) }))
-        .filter((r) => r.mon) // drop junk structs the name table can't validate
+        .filter((r) => r.mon)
       if (!results.length) {
-        setToolMsg('Deep scan: no valid enemy Pokemon found within ±16KB of the watched regions. If you are mid-battle, take a memory dump so I can analyze it.')
+        setToolMsg('Deep scan: no valid enemy Pokemon found within ±16KB of the watched regions. If you are mid-battle, take a memory dump so it can be analyzed.')
         return
       }
-      // Learn only plausible nearby offsets, and keep the watch list small —
-      // distant hits are box/save copies, not the enemy party.
       const newDeltas = [...new Set(results.map((r) => r.delta))]
         .filter((d) => d !== 600 && d !== -600 && Math.abs(d) <= 2400)
       if (newDeltas.length) {
@@ -206,9 +191,9 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
       }
       for (const r of results.slice(0, 8)) {
         seenRef.current.add(r.mon.personality)
-        setSuggestions((s) => [...s, r.mon])
+        autoLog(r.mon)
       }
-      setToolMsg(`Deep scan: found ${results.length} Pokemon at offset${results.length === 1 ? '' : 's'} ${results.slice(0, 10).map((r) => (r.delta > 0 ? '+' : '') + r.delta).join(', ')}${newDeltas.length ? ' — now watching nearby offsets continuously.' : '.'}`)
+      setToolMsg(`Deep scan: logged ${Math.min(results.length, 8)} Pokemon (offsets ${results.slice(0, 10).map((r) => (r.delta > 0 ? '+' : '') + r.delta).join(', ')})${newDeltas.length ? ' — now watching nearby offsets continuously.' : '.'}`)
     } catch (err) {
       setToolMsg(`Deep scan failed: ${err.message}`)
     }
@@ -241,38 +226,29 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
     }
   }
 
-  const dismiss = (mon) => setSuggestions((s) => s.filter((x) => x !== mon))
+  const monLabel = (mon, name) =>
+    name ? titleCase(name) : `#${mon.maskedSpecies ?? mon.internalSpecies}`
 
-  const log = async (mon, name, statusKey, location) => {
-    let chainId = null
-    try { chainId = (await api.get(`/api/family/${name}`)).chainId } catch { /* optional */ }
-    const enc = await api.post(`/api/runs/${run.id}/encounters`, {
-      location,
-      speciesName: name,
-      speciesId: mon.nationalId,
-      chainId,
-      status: statusKey,
-      nickname: '',
-      level: mon.level,
-      shiny: mon.shiny
-    })
-    onLogged(enc)
-    dismiss(mon)
-  }
-
-  const prefill = (mon, name) => {
-    onPrefill({
-      speciesName: name || '',
-      speciesId: mon.nationalId,
-      nickname: '',
-      level: mon.level,
-      shiny: mon.shiny
-    })
-    dismiss(mon)
-  }
+  const fsWrap = fsActive ? document.getElementById('ejs-wrap') : null
 
   return (
     <div className="panel">
+      {fsWrap && toasts.length > 0 && createPortal(
+        <div className="fs-toasts">
+          {toasts.map((t) => (
+            <div className="fs-toast" key={t.id}>
+              {t.mon.nationalId ? <img src={spriteUrl(t.mon.nationalId, t.mon.shiny)} alt="" /> : null}
+              <div className="ft-text">
+                Wild <strong>{monLabel(t.mon, t.name)}</strong> · Lv. {t.mon.level}
+                {t.mon.shiny && <span className="shiny-star"> ✦</span>}
+                <span className="ft-logged"> — logged ✓</span>
+              </div>
+              <button className="small" onClick={() => setToasts((x) => x.filter((y) => y !== t))}>✕</button>
+            </div>
+          ))}
+        </div>,
+        fsWrap
+      )}
       <h2>
         <span className="h2-title"><Radar size={14} /> Encounter radar</span>
         <span className="h-actions">
@@ -286,14 +262,29 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
         <p className="empty-note">
           Starts automatically once the game is running and the party has synced (save in-game if it hasn't yet).
         </p>
-      ) : !watching && !suggestions.length ? (
+      ) : !watching && recent.length === 0 ? (
         <p className="empty-note">
-          Starting automatically within a few seconds… wild battles will pop up here for confirmation.
+          Starting automatically within a few seconds… every wild battle is logged the moment it starts — no clicks needed.
         </p>
       ) : null}
+      {recent.length > 0 && (
+        <div className="radar-recent">
+          {recent.map((r, i) => (
+            <div className="rr-row" key={`${r.mon.personality}-${i}`}>
+              {r.mon.nationalId ? <img src={spriteUrl(r.mon.nationalId, r.mon.shiny)} alt="" /> : <span className="rr-noimg">?</span>}
+              <span>
+                <strong>{monLabel(r.mon, r.name)}</strong> · Lv. {r.mon.level}
+                {r.mon.shiny && <span className="shiny-star"> ✦</span>}
+              </span>
+              <span className="rr-note">logged — annotate in Encounters</span>
+            </div>
+          ))}
+        </div>
+      )}
       {watching && status && (
         <p className="map-tip">
-          {status} Scans: {scanCount}. Trainer battles trigger suggestions too — just dismiss those. Re-calibrate after loading a save state.
+          {status} Scans: {scanCount}. Every detection is auto-logged (trainer battles too — delete those from Encounters).
+          Catches flip to ● Caught automatically when the Pokemon joins your synced party.
         </p>
       )}
       {watching && (
@@ -320,19 +311,6 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
           )}
         </details>
       )}
-      {suggestions.map((mon) => (
-        <SuggestionCard
-          key={mon.personality}
-          mon={mon}
-          name={mon._name || (mon.nationalId && idToName[mon.nationalId]) || ''}
-          run={run}
-          encounters={encounters}
-          locations={locations}
-          onLog={log}
-          onPrefill={prefill}
-          onDismiss={() => dismiss(mon)}
-        />
-      ))}
     </div>
   )
 }

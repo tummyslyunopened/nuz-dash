@@ -25,6 +25,9 @@ settings.data.settings = {
   tunnelMode: 'quick', // quick (random trycloudflare URL) | named (your own Cloudflare domain)
   tunnelName: 'nuz-dash',
   tunnelHostname: '',
+  // Local .state downloads in players' browsers (plus the download-permission
+  // priming flow). OFF by default — the server pair + history are the backups.
+  localStateDownloads: false,
   ...settings.data.settings
 }
 
@@ -36,6 +39,18 @@ for (const d of [romsDir, statesDir, spritesDir, dumpsDir]) fs.mkdirSync(d, { re
 
 const token = () => crypto.randomBytes(20).toString('hex')
 const now = () => new Date().toISOString()
+
+// Atomic binary writes: never leave a truncated sav/state/ROM as the latest copy
+const writeAtomic = (file, buf) => {
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, buf)
+  fs.renameSync(tmp, file)
+}
+
+// Savestates are only valid for the core that wrote them. Stamped on write,
+// checked on read; mismatches 404 so clients fall back to the battery save.
+// BUMP THIS whenever server/emulatorjs-data cores are upgraded.
+const EMU_CORE_VERSION = process.env.NUZ_CORE_VERSION || 'emulatorjs-4.2.3'
 
 // ---------- one-time migration from the single-user layout ----------
 if (!lobbies.data.lobbies.length && runs.data.runs.some((r) => !r.memberId)) {
@@ -326,6 +341,7 @@ app.put('/api/me/controls', (req, res) => {
 app.get('/api/me', (req, res) => {
   res.json({
     publicUrl: tunnel.url, // preferred origin for shareable links
+    localDownloads: !!settings.data.settings.localStateDownloads,
     member: { ...publicMember(req.member), controls: req.member.controls || null },
     lobby: {
       id: req.lobby.id,
@@ -382,7 +398,7 @@ function addRomToLobby(lobby, filename, body) {
     try { fs.unlinkSync(path.join(romsDir, existing.file)) } catch { /* already gone */ }
   }
   const file = `${lobby.id}-${id}.${ext}`
-  fs.writeFileSync(path.join(romsDir, file), body)
+  writeAtomic(path.join(romsDir, file), body)
   const entry = { id, name: filename, file, core, size: body.length, uploadedAt: now() }
   lobby.roms = [entry]
   lobbies.save()
@@ -482,6 +498,8 @@ app.delete('/api/runs/:id', (req, res) => {
   for (const slot of STATE_SLOTS) {
     try { fs.unlinkSync(path.join(statesDir, `${run.id}-${slot}.state`)) } catch { /* empty */ }
   }
+  try { fs.unlinkSync(path.join(statesDir, `${run.id}-battery.sav`)) } catch { /* none */ }
+  deleteRunHistory(run.memberId, run.id)
   runs.data.runs = runs.data.runs.filter((r) => r.id !== run.id)
   encounters.data.encounters = encounters.data.encounters.filter((e) => e.runId !== run.id)
   diary.data.entries = diary.data.entries.filter((d) => d.runId !== run.id)
@@ -530,14 +548,15 @@ app.get('/api/runs/:id/encounters', (req, res) => {
 app.post('/api/runs/:id/encounters', (req, res) => {
   const run = ownRun(req, req.params.id)
   if (!run) return res.status(404).json({ error: 'not found or not yours' })
-  const { location, speciesName, speciesId, chainId, status, nickname, level, shiny } = req.body
-  if (!location || !speciesName || !status) {
-    return res.status(400).json({ error: 'location, speciesName, status required' })
+  const { location, speciesName, speciesId, chainId, status, nickname, level, shiny, personality } = req.body
+  if (!speciesName || !status) {
+    return res.status(400).json({ error: 'speciesName and status required' })
   }
   const enc = {
     id: crypto.randomUUID(),
     runId: run.id,
-    location,
+    location: location || '', // may be blank: auto-logged encounters are annotated later
+    personality: personality ?? null, // wild mon PID, used to auto-flip to "caught"
     speciesName,
     speciesId: speciesId ?? null,
     chainId: chainId ?? null,
@@ -559,11 +578,12 @@ app.put('/api/encounters/:id', (req, res) => {
   const enc = encounters.data.encounters.find((e) => e.id === req.params.id)
   const run = enc && ownRun(req, enc.runId)
   if (!run) return res.status(404).json({ error: 'not found or not yours' })
-  const editable = ['location', 'speciesName', 'speciesId', 'chainId', 'status', 'nickname', 'level', 'shiny', 'alive', 'deathNote']
+  const editable = ['location', 'speciesName', 'speciesId', 'chainId', 'status', 'nickname', 'level', 'shiny', 'alive', 'deathNote', 'personality']
   for (const key of editable) {
     if (req.body[key] !== undefined) enc[key] = req.body[key]
   }
   if (req.body.status && req.body.status !== 'caught') enc.alive = false
+  else if (req.body.status === 'caught' && req.body.alive === undefined) enc.alive = true
   encounters.save()
   touchRun(run.id)
   res.json(enc)
@@ -661,17 +681,119 @@ app.put('/api/maps/:gameId/nodes', (req, res) => {
   res.json(entry)
 })
 
+// ---------- Single-session guard ----------
+// One live session per run may push save data. In-memory; a server restart
+// simply lets the first session re-claim.
+const SESSION_FRESH_MS = 25000
+const playSessions = new Map() // runId -> { sid, at }
+
+function sessionConflict(req, runId) {
+  const sid = req.headers['x-nuz-session']
+  const cur = playSessions.get(runId)
+  if (cur && sid && cur.sid !== sid && Date.now() - cur.at < SESSION_FRESH_MS) return true
+  if (sid) playSessions.set(runId, { sid, at: Date.now() })
+  return false
+}
+
+app.post('/api/runs/:id/session', (req, res) => {
+  const run = ownRun(req, req.params.id)
+  if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  const sid = req.headers['x-nuz-session']
+  if (!sid) return res.status(400).json({ error: 'X-Nuz-Session header required' })
+  const cur = playSessions.get(run.id)
+  if (cur && cur.sid !== sid && Date.now() - cur.at < SESSION_FRESH_MS && !req.body.takeover) {
+    return res.status(409).json({ error: 'this run is being played in another session' })
+  }
+  playSessions.set(run.id, { sid, at: Date.now() })
+  res.json({ ok: true })
+})
+
 // ---------- Save states (per attempt: 3 manual slots + rolling auto slot) ----------
 const STATE_SLOTS = ['1', '2', '3', 'auto']
+
+// Per-member rolling archive of every pushed sav/state, pruned oldest-first
+// past the cap. Lets users download timestamped historical saves; auto-load
+// still only ever uses the latest auto pair.
+const historyDir = path.join(dataDir, 'saves-history')
+fs.mkdirSync(historyDir, { recursive: true })
+const HISTORY_CAP = Number(process.env.NUZ_HISTORY_CAP) || 1024 * 1024 * 1024 // 1GB per member
+
+function archiveSaveFile(memberId, runId, ext, body) {
+  try {
+    const dir = path.join(historyDir, memberId)
+    fs.mkdirSync(dir, { recursive: true })
+    writeAtomic(path.join(dir, `${now().replace(/[:.]/g, '-')}__${runId}.${ext}`), body)
+    const files = fs.readdirSync(dir)
+      .map((f) => {
+        const st = fs.statSync(path.join(dir, f))
+        return { f, size: st.size, mtime: st.mtimeMs }
+      })
+      .sort((a, b) => a.mtime - b.mtime)
+    let total = files.reduce((s, x) => s + x.size, 0)
+    for (const x of files) {
+      if (total <= HISTORY_CAP) break
+      try { fs.unlinkSync(path.join(dir, x.f)); total -= x.size } catch { /* race */ }
+    }
+  } catch (err) {
+    console.error('history archive failed:', err.message)
+  }
+}
+
+function deleteRunHistory(memberId, runId) {
+  const dir = path.join(historyDir, memberId)
+  if (!fs.existsSync(dir)) return
+  for (const f of fs.readdirSync(dir)) {
+    if (f.includes(`__${runId}.`)) {
+      try { fs.unlinkSync(path.join(dir, f)) } catch { /* fine */ }
+    }
+  }
+}
+
+const HIST_FILE = /^[\w.-]+__[\w-]+\.(state|sav|mstate)$/
+
+app.get('/api/me/save-history', (req, res) => {
+  const dir = path.join(historyDir, req.member.id)
+  if (!fs.existsSync(dir)) return res.json({ files: [], totalSize: 0, cap: HISTORY_CAP })
+  const attemptByRun = {}
+  for (const r of runs.data.runs.filter((r) => r.memberId === req.member.id)) {
+    attemptByRun[r.id] = r.attemptNumber
+  }
+  const files = fs.readdirSync(dir)
+    .map((f) => {
+      const m = /^(.+)__(.+)\.(state|sav|mstate)$/.exec(f)
+      if (!m) return null
+      const st = fs.statSync(path.join(dir, f))
+      return {
+        file: f,
+        type: m[3],
+        runId: m[2],
+        attemptNumber: attemptByRun[m[2]] ?? null,
+        size: st.size,
+        savedAt: new Date(st.mtimeMs).toISOString()
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
+  res.json({ files, totalSize: files.reduce((s, x) => s + x.size, 0), cap: HISTORY_CAP })
+})
+
+app.get('/api/me/save-history/:file', (req, res) => {
+  if (!HIST_FILE.test(req.params.file)) return res.status(400).json({ error: 'bad filename' })
+  const file = path.join(historyDir, req.member.id, req.params.file)
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'not found' })
+  res.download(file)
+})
 
 app.post('/api/runs/:id/states/:slot', express.raw({ type: 'application/octet-stream', limit: '64mb' }), (req, res) => {
   const run = ownRun(req, req.params.id)
   if (!run) return res.status(404).json({ error: 'not found or not yours' })
   if (!STATE_SLOTS.includes(req.params.slot)) return res.status(400).json({ error: 'slot must be 1-3 or auto' })
   if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty state' })
-  fs.writeFileSync(path.join(statesDir, `${run.id}-${req.params.slot}.state`), req.body)
+  if (sessionConflict(req, run.id)) return res.status(409).json({ error: 'run is being played in another session' })
+  writeAtomic(path.join(statesDir, `${run.id}-${req.params.slot}.state`), req.body)
+  if (req.params.slot === 'auto') archiveSaveFile(req.member.id, run.id, 'state', req.body)
   run.states = run.states || {}
-  run.states[req.params.slot] = { savedAt: now(), size: req.body.length }
+  run.states[req.params.slot] = { savedAt: now(), size: req.body.length, core: EMU_CORE_VERSION }
   run.updatedAt = now()
   runs.save()
   res.json(serializeRun(run, req.lobby))
@@ -680,9 +802,48 @@ app.post('/api/runs/:id/states/:slot', express.raw({ type: 'application/octet-st
 app.get('/api/runs/:id/states/:slot', (req, res) => {
   const run = ownRun(req, req.params.id)
   if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  const meta = run.states?.[req.params.slot]
+  if (meta?.core && meta.core !== EMU_CORE_VERSION) {
+    return res.status(404).json({ error: `state was written by ${meta.core}, current core is ${EMU_CORE_VERSION} — resume from the battery save` })
+  }
   const file = path.join(statesDir, `${run.id}-${req.params.slot}.state`)
   if (!fs.existsSync(file)) return res.status(404).json({ error: 'slot empty' })
   res.sendFile(file)
+})
+
+// Battery save (.sav) backup per attempt. Savestates don't reliably include
+// SRAM, so this is restored into the emulator FS on boot — it's what makes
+// the party scanner (and in-game Continue) work before the first new save.
+app.post('/api/runs/:id/sav', express.raw({ type: 'application/octet-stream', limit: '4mb' }), (req, res) => {
+  const run = ownRun(req, req.params.id)
+  if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty save' })
+  if (sessionConflict(req, run.id)) return res.status(409).json({ error: 'run is being played in another session' })
+  writeAtomic(path.join(statesDir, `${run.id}-battery.sav`), req.body)
+  archiveSaveFile(req.member.id, run.id, 'sav', req.body)
+  run.sav = { savedAt: now(), size: req.body.length }
+  run.updatedAt = now()
+  runs.save()
+  res.json(serializeRun(run, req.lobby))
+})
+
+app.get('/api/runs/:id/sav', (req, res) => {
+  const run = ownRun(req, req.params.id)
+  if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  const file = path.join(statesDir, `${run.id}-battery.sav`)
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'no battery backup yet' })
+  res.sendFile(file)
+})
+
+// Manual save states made via the emulator menu — archived to history only
+// (never auto-loaded; the sav-only resume policy stands).
+app.post('/api/runs/:id/manual-state', express.raw({ type: 'application/octet-stream', limit: '64mb' }), (req, res) => {
+  const run = ownRun(req, req.params.id)
+  if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty state' })
+  if (sessionConflict(req, run.id)) return res.status(409).json({ error: 'run is being played in another session' })
+  archiveSaveFile(req.member.id, run.id, 'mstate', req.body)
+  res.json({ ok: true })
 })
 
 // ---------- Live game streaming (watch party) ----------
@@ -762,6 +923,7 @@ function deleteRunData(runId) {
   for (const slot of STATE_SLOTS) {
     try { fs.unlinkSync(path.join(statesDir, `${runId}-${slot}.state`)) } catch { /* empty */ }
   }
+  try { fs.unlinkSync(path.join(statesDir, `${runId}-battery.sav`)) } catch { /* none */ }
   encounters.data.encounters = encounters.data.encounters.filter((e) => e.runId !== runId)
   diary.data.entries = diary.data.entries.filter((d) => d.runId !== runId)
 }
@@ -771,6 +933,7 @@ function deleteMemberCascade(memberId) {
   runs.data.runs = runs.data.runs.filter((r) => r.memberId !== memberId)
   members.data.members = members.data.members.filter((m) => m.id !== memberId)
   streams.delete(memberId)
+  try { fs.rmSync(path.join(historyDir, memberId), { recursive: true, force: true }) } catch { /* fine */ }
 }
 
 function deleteLobbyCascade(lobbyId) {
@@ -788,6 +951,62 @@ function deleteLobbyCascade(lobbyId) {
 }
 
 const saveAll = () => { lobbies.save(); members.save(); runs.save(); encounters.save(); diary.save(); maps.save() }
+
+adminApp.get('/api/settings', (req, res) => {
+  res.json({ localStateDownloads: !!settings.data.settings.localStateDownloads })
+})
+
+adminApp.post('/api/settings', (req, res) => {
+  if (typeof req.body.localStateDownloads === 'boolean') {
+    settings.data.settings.localStateDownloads = req.body.localStateDownloads
+  }
+  settings.save()
+  res.json({ localStateDownloads: !!settings.data.settings.localStateDownloads })
+})
+
+// Per-runner save storage: history archive + live resume files
+adminApp.get('/api/storage', (req, res) => {
+  const rows = []
+  for (const m of members.data.members) {
+    const lobby = lobbies.data.lobbies.find((l) => l.id === m.lobbyId)
+    let historyFiles = 0
+    let historyBytes = 0
+    const dir = path.join(historyDir, m.id)
+    if (fs.existsSync(dir)) {
+      for (const f of fs.readdirSync(dir)) {
+        try {
+          historyBytes += fs.statSync(path.join(dir, f)).size
+          historyFiles++
+        } catch { /* race */ }
+      }
+    }
+    let liveBytes = 0
+    for (const r of runs.data.runs.filter((x) => x.memberId === m.id)) {
+      for (const f of [`${r.id}-auto.state`, `${r.id}-battery.sav`, `${r.id}-1.state`, `${r.id}-2.state`, `${r.id}-3.state`]) {
+        const p = path.join(statesDir, f)
+        try { if (fs.existsSync(p)) liveBytes += fs.statSync(p).size } catch { /* race */ }
+      }
+    }
+    rows.push({
+      memberId: m.id,
+      name: m.name,
+      lobby: lobby?.name || '?',
+      historyFiles,
+      historyBytes,
+      liveBytes,
+      totalBytes: historyBytes + liveBytes
+    })
+  }
+  rows.sort((a, b) => b.totalBytes - a.totalBytes)
+  res.json({ rows, cap: HISTORY_CAP, grandTotal: rows.reduce((s, r) => s + r.totalBytes, 0) })
+})
+
+adminApp.delete('/api/storage/:memberId/history', (req, res) => {
+  const dir = path.join(historyDir, req.params.memberId)
+  if (!fs.existsSync(dir)) return res.status(404).json({ error: 'no history' })
+  fs.rmSync(dir, { recursive: true, force: true })
+  res.json({ ok: true })
+})
 
 adminApp.get('/api/tunnel', (req, res) => {
   const cfg = settings.data.settings

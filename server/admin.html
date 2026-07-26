@@ -46,8 +46,14 @@
 <h1>Nuz-Dash <span class="tag">ADMIN</span></h1>
 <p class="sub">Local: bound to 127.0.0.1. Cloud: mounted at /admin behind basic auth (ADMIN_TOKEN). Deletions are immediate and permanent.</p>
 
+<h2>Server settings</h2>
+<div id="srvsettings" class="card"><p class="empty">Loading…</p></div>
+
 <h2>Public tunnel</h2>
 <div id="tunnel" class="card"><p class="empty">Loading…</p></div>
+
+<h2>Save storage</h2>
+<div id="storage"><p class="empty">Loading…</p></div>
 
 <h2>Lobbies</h2>
 <div id="lobbies"><p class="empty">Loading…</p></div>
@@ -88,6 +94,58 @@ const onMainApp = location.pathname.startsWith('/admin')
 const origin = () => publicUrl || (onMainApp ? location.origin : `http://${location.hostname}:${mainPort}`)
 const memberUrl = (token) => `${origin()}/m/${token}`
 const inviteUrl = (token) => `${origin()}/join/${token}`
+
+async function loadSrvSettings() {
+  const s = await call('GET', 'api/settings')
+  document.getElementById('srvsettings').innerHTML = `
+    <div class="meta">
+      <label><input type="checkbox" ${s.localStateDownloads ? 'checked' : ''} onchange="toggleLocalDownloads(this.checked)">
+      Local .state downloads in players' browsers (per in-game save + manual states, plus the one-time
+      "allow multiple downloads" priming flow). Off by default — the server pair and history are the backups.</label>
+    </div>`
+}
+
+async function toggleLocalDownloads(enabled) {
+  await call('POST', 'api/settings', { localStateDownloads: enabled })
+  toast(enabled ? 'Local downloads enabled — players pick it up within a session reload' : 'Local downloads disabled')
+}
+
+async function loadStorage() {
+  const s = await call('GET', 'api/storage')
+  const el = document.getElementById('storage')
+  if (!s.rows.length) { el.innerHTML = '<p class="empty">No runners.</p>'; return }
+  const fmt = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB'
+  el.innerHTML = `
+    <div class="card">
+      <div class="meta" style="margin-bottom:8px">Total save storage: <b>${fmt(s.grandTotal)}</b> · history cap ${(s.cap / 1073741824).toFixed(0)} GB per runner (oldest auto-pruned)</div>
+      <table>
+        <tr><th>Runner</th><th>Lobby</th><th>History</th><th>Live files</th><th>Total</th><th style="width:180px">Usage vs cap</th><th></th></tr>
+        ${s.rows.map((r) => `
+          <tr>
+            <td>${esc(r.name)}</td>
+            <td class="meta">${esc(r.lobby)}</td>
+            <td>${r.historyFiles} files · ${fmt(r.historyBytes)}</td>
+            <td>${fmt(r.liveBytes)}</td>
+            <td><b>${fmt(r.totalBytes)}</b></td>
+            <td><div style="background:var(--surface2);border-radius:4px;height:10px;overflow:hidden">
+              <div style="height:100%;border-radius:4px;background:${r.historyBytes / s.cap > 0.8 ? 'var(--critical)' : 'var(--accent)'};width:${Math.max(1, Math.min(100, (r.historyBytes / s.cap) * 100)).toFixed(1)}%"></div>
+            </div></td>
+            <td style="text-align:right">
+              ${r.historyFiles ? `<button class="danger" onclick="clearHistory('${r.memberId}', '${esc(r.name)}')">Clear history</button>` : ''}
+            </td>
+          </tr>`).join('')}
+      </table>
+      <p class="meta" style="margin-top:8px">"Live files" are the current resume pair + manual slots — never deleted from here.
+      Clearing history removes a runner's downloadable archive only; their resume point is untouched.</p>
+    </div>`
+}
+
+async function clearHistory(memberId, name) {
+  if (!confirm(`Delete ${name}'s entire backup history archive? Their current resume point (auto-save + battery) is NOT affected.`)) return
+  await call('DELETE', 'api/storage/' + memberId + '/history')
+  toast('History cleared')
+  loadStorage()
+}
 
 async function loadTunnel() {
   const t = await call('GET', 'api/tunnel')
@@ -270,12 +328,14 @@ async function deleteBug(file) {
 }
 
 async function boot() {
+  try { await loadSrvSettings() } catch (e) { document.getElementById('srvsettings').innerHTML = `<p class="empty">${esc(e.message)}</p>` }
   try { await loadTunnel() } catch (e) { document.getElementById('tunnel').innerHTML = `<p class="empty">${esc(e.message)}</p>` }
   loadLobbies().catch((e) => { document.getElementById('lobbies').innerHTML = `<p class="empty">${esc(e.message)}</p>` })
+  loadStorage().catch((e) => { document.getElementById('storage').innerHTML = `<p class="empty">${esc(e.message)}</p>` })
   loadBugs().catch((e) => { document.getElementById('bugs').innerHTML = `<p class="empty">${esc(e.message)}</p>` })
 }
 boot()
-setInterval(() => { loadTunnel().then(loadLobbies).catch(() => {}) }, 30000)
+setInterval(() => { loadTunnel().then(loadLobbies).then(loadStorage).catch(() => {}) }, 30000)
 </script>
 </body>
 </html>

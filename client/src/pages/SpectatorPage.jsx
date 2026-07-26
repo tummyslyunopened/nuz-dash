@@ -96,6 +96,7 @@ export default function SpectatorPage() {
           {encounters.length === 0 ? (
             <p className="empty-note">Nothing yet.</p>
           ) : (
+            <div className="table-scroll">
             <table className="enc-table">
               <thead><tr><th>Pokemon</th><th>Location</th><th>Lv.</th><th>Status</th></tr></thead>
               <tbody>
@@ -127,6 +128,7 @@ export default function SpectatorPage() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
