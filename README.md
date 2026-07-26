@@ -1,6 +1,6 @@
 # Nuz-Dash
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/5oXtmS?referralCode=rQ5Jyn&utm_medium=integration&utm_source=template&utm_campaign=generic)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/cool-keen?referralCode=rQ5Jyn&utm_medium=integration&utm_source=template&utm_campaign=generic)
 [![Sponsor](https://img.shields.io/badge/♡_Sponsor-tummyslyunopened-8b5cf6)](https://github.com/sponsors/tummyslyunopened)
 
 A multiplayer Pokemon Nuzlocke run platform. Create a lobby, invite friends with a
