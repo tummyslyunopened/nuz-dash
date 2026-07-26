@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, Trophy, Gamepad2, Users } from 'lucide-react'
-import { api, authHeaders, rememberLink } from '../api.js'
+import { api, authHeaders, rememberLink, forgetLink } from '../api.js'
 import StreamView from '../components/StreamView.jsx'
 
 const fmtSize = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`)
@@ -23,15 +23,39 @@ export default function LobbyHome() {
   const [copied, setCopied] = useState('')
   const [showNew, setShowNew] = useState(false)
   const [gameId, setGameId] = useState('')
-  const [romId, setRomId] = useState('')
   const [rules, setRules] = useState({ dupesClause: true, shinyClause: true, hardcore: false })
   const [uploading, setUploading] = useState(false)
+  const [regenLink, setRegenLink] = useState(null) // { name, url } after regenerating someone's link
   const fileRef = useRef(null)
   const navigate = useNavigate()
+
+  const regenerate = async (member) => {
+    const isSelf = member.id === (me?.member.id)
+    const who = isSelf ? 'yourself' : member.name
+    if (!window.confirm(
+      `Generate a NEW secret link for ${who}? The old link stops working immediately. ` +
+      (isSelf ? 'You will be moved to the new link — update your bookmark.' : `Share the new link privately with ${member.name} so they can get their progress back.`)
+    )) return
+    try {
+      const r = await api.post(`/api/members/${member.id}/regenerate-link`, {})
+      const url = `${me.publicUrl || window.location.origin}/m/${r.memberToken}`
+      if (isSelf) {
+        forgetLink(token)
+        rememberLink(r.memberToken, `${me.member.name} @ ${me.lobby.name}`)
+        navigate(`/m/${r.memberToken}`)
+      } else {
+        setRegenLink({ name: r.name, url })
+      }
+    } catch (err) {
+      setError(err.message)
+    }
+  }
 
   const refresh = () => {
     api.get('/api/lobby/summary').then(setSummary).catch(() => {})
     api.get('/api/runs?memberId=me').then(setAttempts).catch(() => {})
+    // keep publicUrl fresh so copied links track the live tunnel
+    api.get('/api/me').then((d) => setMe((prev) => (prev ? { ...prev, publicUrl: d.publicUrl } : d))).catch(() => {})
   }
 
   useEffect(() => {
@@ -54,7 +78,6 @@ export default function LobbyHome() {
     const last = attempts[0]
     if (last) {
       setRules(last.rules)
-      if (last.romId) setRomId(last.romId)
       setGameId((g) => last.gameId || g)
     }
   }, [attempts.length]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -77,8 +100,7 @@ export default function LobbyHome() {
       })
       if (!res.ok) throw new Error((await res.json()).error || `${res.status}`)
       const entry = await res.json()
-      setMe((m) => ({ ...m, lobby: { ...m.lobby, roms: [...m.lobby.roms, entry] } }))
-      setRomId(entry.id)
+      setMe((m) => ({ ...m, lobby: { ...m.lobby, roms: [entry] } }))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -90,7 +112,7 @@ export default function LobbyHome() {
     e.preventDefault()
     setError('')
     try {
-      const run = await api.post('/api/runs', { gameId, romId: romId || null, rules })
+      const run = await api.post('/api/runs', { gameId, rules })
       navigate(`/m/${token}/run/${run.id}`)
     } catch (err) {
       setError(err.message)
@@ -105,8 +127,11 @@ export default function LobbyHome() {
     )
   }
 
-  const inviteUrl = `${window.location.origin}/join/${me.lobby.inviteToken}`
-  const myUrl = `${window.location.origin}/m/${token}`
+  // Copied links prefer the live tunnel URL so they work for people outside
+  // this machine, no matter which origin YOU are browsing from.
+  const shareOrigin = me.publicUrl || window.location.origin
+  const inviteUrl = `${shareOrigin}/join/${me.lobby.inviteToken}`
+  const myUrl = `${shareOrigin}/m/${token}`
 
   return (
     <div className="app-shell">
@@ -122,6 +147,9 @@ export default function LobbyHome() {
           <button className="chip" onClick={() => copy(myUrl, 'personal')}>
             {copied === 'personal' ? <><Check size={13} /> Copied!</> : <><KeyRound size={13} /> Copy my secret link</>}
           </button>
+          <span className="chip" title={me.publicUrl ? `Links copy with the public tunnel address: ${me.publicUrl}` : 'No tunnel running — links copy with this browser\'s address and may not work for others. Start the tunnel from the admin dashboard.'}>
+            {me.publicUrl ? '🌐 public links' : '⚠ local links'}
+          </span>
         </div>
       </div>
       {error && <p className="error-note">{error}</p>}
@@ -154,10 +182,11 @@ export default function LobbyHome() {
                 <select value={gameId} onChange={(e) => setGameId(e.target.value)}>
                   {games.map((g) => <option key={g.id} value={g.id}>{g.name} (Gen {g.gen})</option>)}
                 </select>
-                <select value={romId} onChange={(e) => setRomId(e.target.value)}>
-                  <option value="">No ROM (tracker only, or pick later)</option>
-                  {me.lobby.roms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
+                <p className="map-tip" style={{ margin: 0 }}>
+                  {me.lobby.roms[0]
+                    ? `Uses the lobby ROM: ${me.lobby.roms[0].name}`
+                    : 'No lobby ROM uploaded yet — the attempt starts tracker-only.'}
+                </p>
                 <div className="rules">
                   <label><input type="checkbox" checked={rules.dupesClause} onChange={(e) => setRules({ ...rules, dupesClause: e.target.checked })} /> Dupes clause</label>
                   <label><input type="checkbox" checked={rules.shinyClause} onChange={(e) => setRules({ ...rules, shinyClause: e.target.checked })} /> Shiny clause</label>
@@ -186,32 +215,38 @@ export default function LobbyHome() {
 
           <div className="panel">
             <h2>
-              <span className="h2-title"><Gamepad2 size={14} /> ROM library</span>
+              <span className="h2-title"><Gamepad2 size={14} /> Lobby ROM</span>
               <span className="h-actions">
                 <button className="small" onClick={() => fileRef.current?.click()} disabled={uploading}>
-                  <Upload size={12} /> {uploading ? 'Uploading…' : 'Upload ROM'}
+                  <Upload size={12} /> {uploading ? 'Uploading…' : me.lobby.roms.length ? 'Replace ROM' : 'Upload ROM'}
                 </button>
               </span>
             </h2>
             <input ref={fileRef} type="file" accept=".gb,.gbc,.sgb,.gba,.nds" style={{ display: 'none' }}
               onChange={(e) => e.target.files[0] && uploadRom(e.target.files[0])} />
             {me.lobby.roms.length === 0 ? (
-              <p className="empty-note">No ROMs yet — upload the patched ROMs this lobby will race (your own legal dumps).</p>
+              <p className="empty-note">No ROM yet — upload the patched ROM this lobby will race (your own legal dump). One ROM per lobby; everyone runs the same game.</p>
             ) : (
-              me.lobby.roms.map((r) => (
-                <div className="run-card" key={r.id}>
-                  <div className="info">
-                    <strong>{r.name}</strong>
-                    <div className="sub">{r.core.toUpperCase()} · {fmtSize(r.size)}</div>
-                  </div>
+              <div className="run-card">
+                <div className="info">
+                  <strong>{me.lobby.roms[0].name}</strong>
+                  <div className="sub">{me.lobby.roms[0].core.toUpperCase()} · {fmtSize(me.lobby.roms[0].size)} · used by every attempt in this lobby</div>
                 </div>
-              ))
+              </div>
             )}
           </div>
         </div>
 
         <div className="panel">
           <h2><span className="h2-title"><Users size={14} /> Runners</span></h2>
+          {regenLink && (
+            <div className="warn-note ok" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+              <span>New secret link for <strong>{regenLink.name}</strong> — share it privately, their old one is dead:</span>
+              <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{regenLink.url}</code>
+              <button className="small" onClick={() => copy(regenLink.url, 'regen')}>{copied === 'regen' ? '✓ Copied' : 'Copy'}</button>
+              <button className="small" onClick={() => setRegenLink(null)}>Dismiss</button>
+            </div>
+          )}
           {summary.map((s) => (
             <div className="run-card runner-card" key={s.member.id}>
               {s.live && s.member.id !== me.member.id && (
@@ -232,13 +267,16 @@ export default function LobbyHome() {
                   <div className="sub">{s.attempts === 0 ? 'No attempts yet' : `${s.attempts} past attempt${s.attempts === 1 ? '' : 's'} — none active`}</div>
                 )}
               </div>
+              <span className="spacer" />
+              <button
+                className="small"
+                title={s.member.id === me.member.id ? 'Regenerate your secret link (old one stops working)' : `Regenerate ${s.member.name}'s secret link — for when they've lost theirs`}
+                onClick={() => regenerate(s.member)}
+              ><KeyRound size={12} /></button>
               {s.member.id !== me.member.id && (
-                <>
-                  <span className="spacer" />
-                  <Link to={`/m/${token}/view/${s.member.id}`}>
-                    <button className={`small ${s.live ? 'primary' : ''}`}><Eye size={12} /> {s.live ? 'Watch live' : 'Watch'}</button>
-                  </Link>
-                </>
+                <Link to={`/m/${token}/view/${s.member.id}`}>
+                  <button className={`small ${s.live ? 'primary' : ''}`}><Eye size={12} /> {s.live ? 'Watch live' : 'Watch'}</button>
+                </Link>
               )}
             </div>
           ))}

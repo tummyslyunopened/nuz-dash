@@ -70,6 +70,14 @@ Cloudflare-managed domain (`cloudflared tunnel create nuz-dash`, route a DNS rec
 then `cloudflared tunnel run`). Remember: secret links are the only auth, so share
 them like passwords.
 
+## Onboarding site (nuzdash.dev)
+
+`site/` holds the public landing/onboarding page — a single self-contained
+`index.html` with the self-host guide and a download link to the latest GitHub
+release. Deploy it to Cloudflare Pages (project root `site/`, no build command)
+and point the nuzdash.dev domain at it once purchased. The `site/` directory is
+excluded from release source archives via `.gitattributes` (`export-ignore`).
+
 ## Data
 
 Everything lives in `server/data/` as JSON files (plus uploaded map images) — back up

@@ -9,6 +9,7 @@ import DiaryPanel from '../components/DiaryPanel.jsx'
 import EmulatorPanel from '../components/EmulatorPanel.jsx'
 import LivePartyPanel from '../components/LivePartyPanel.jsx'
 import EncounterRadar from '../components/EncounterRadar.jsx'
+import WatchPartyPanel from '../components/WatchPartyPanel.jsx'
 
 export default function RunPage() {
   const { token, id } = useParams()
@@ -17,7 +18,7 @@ export default function RunPage() {
   const [locations, setLocations] = useState([])
   const [map, setMap] = useState(null)
   const [error, setError] = useState('')
-  const [view, setView] = useState('dash') // dash | play
+  const [view, setView] = useState('play') // play (default) | dash
   const [prefill, setPrefill] = useState(null)
   const [lastParty, setLastParty] = useState([])
 
@@ -173,6 +174,9 @@ export default function RunPage() {
         </div>
         <div className="dash-col">
           <EncountersPanel run={run} encounters={encounters} setEncounters={setEncounters} locations={locations} prefill={prefill} />
+          <div style={{ display: view === 'play' ? 'block' : 'none' }}>
+            <WatchPartyPanel />
+          </div>
           <DiaryPanel run={run} locations={locations} />
         </div>
       </div>

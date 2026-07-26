@@ -24,6 +24,24 @@ export async function readEmulatorSave() {
 
 export const emulatorRunning = () => !!window.EJS_emulator?.gameManager
 
+// Push the current emulator state to the server's rolling "auto" slot.
+// Called on detected in-game saves and on a heartbeat while playing.
+export async function pushAutoState(runId) {
+  const gm = window.EJS_emulator?.gameManager
+  if (!gm) return null
+  try {
+    const bytes = gm.getState()
+    const res = await fetch(`/api/runs/${runId}/states/auto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', ...authHeaders() },
+      body: bytes
+    })
+    return res.ok ? await res.json() : null
+  } catch {
+    return null
+  }
+}
+
 const fmtSize = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`)
 
 const timeAgo = (iso) => {
@@ -41,6 +59,55 @@ export default function EmulatorPanel({ run, setRun }) {
   const [stateMsg, setStateMsg] = useState('')
   const [streaming, setStreaming] = useState(true)
   const fileRef = useRef(null)
+
+  // Controller bindings follow the member: watch the live mapping while
+  // playing and push changes to the server (loaded back at game start).
+  useEffect(() => {
+    if (!started) return
+    let lastSent = JSON.stringify(window.EJS_defaultControls || null)
+    const t = setInterval(async () => {
+      const controls = window.EJS_emulator?.controls
+      if (!controls) return
+      const snapshot = JSON.stringify(controls)
+      if (snapshot === lastSent) return
+      try {
+        const res = await fetch('/api/me/controls', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ controls })
+        })
+        if (res.ok) lastSent = snapshot
+      } catch { /* retry next tick */ }
+    }, 10000)
+    return () => clearInterval(t)
+  }, [started])
+
+  // Heartbeat: refresh the server's auto state every 3 minutes while playing
+  useEffect(() => {
+    if (!started) return
+    const t = setInterval(async () => {
+      const updated = await pushAutoState(run.id)
+      if (updated) setRun(updated)
+    }, 180000)
+    return () => clearInterval(t)
+  }, [started, run.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-resume: when the game starts, load the NEWEST server-side state
+  // (auto or manual slot). Manual loads remain available at any time.
+  const autoResume = async () => {
+    try {
+      const fresh = await fetch(`/api/runs/${run.id}`, { headers: authHeaders() }).then((r) => r.json())
+      const slots = Object.entries(fresh.states || {})
+      if (!slots.length) return
+      const [slot, meta] = slots.sort((a, b) => b[1].savedAt.localeCompare(a[1].savedAt))[0]
+      const res = await fetch(`/api/runs/${run.id}/states/${slot}`, { headers: authHeaders() })
+      if (!res.ok) return
+      const gm = window.EJS_emulator?.gameManager
+      if (!gm) return
+      gm.loadState(new Uint8Array(await res.arrayBuffer()))
+      setStateMsg(`Resumed from server state (${slot === 'auto' ? 'auto' : `slot ${slot}`}, saved ${timeAgo(meta.savedAt)}).`)
+    } catch { /* fresh boot is fine */ }
+  }
 
   // Watch-party broadcast: copy the emulator canvas to JPEG (~2fps) and push
   // the latest frame to the server for lobby-mates to watch. drawImage runs
@@ -136,7 +203,13 @@ export default function EmulatorPanel({ run, setRun }) {
     setRun(await res.json())
   }
 
-  const start = () => {
+  const start = async () => {
+    // Seed the emulator with this member's saved controller bindings
+    try {
+      const me = await fetch('/api/me', { headers: authHeaders() }).then((r) => r.json())
+      if (me?.member?.controls) window.EJS_defaultControls = me.member.controls
+    } catch { /* built-in defaults are fine */ }
+    window.EJS_onGameStart = () => setTimeout(autoResume, 1200)
     window.EJS_player = '#ejs-mount'
     window.EJS_core = run.rom.core
     window.EJS_gameName = run.rom.name.replace(/\.[^.]+$/, '')
@@ -198,6 +271,13 @@ export default function EmulatorPanel({ run, setRun }) {
           {started && (
             <>
               <div className="state-slots">
+                <div className="state-slot" key="auto">
+                  <span className="ss-label">
+                    Auto
+                    <span className="ss-meta">{run.states?.auto ? ` · ${timeAgo(run.states.auto.savedAt)}` : ' · none yet'}</span>
+                  </span>
+                  <button className="small" onClick={() => loadState('auto')} disabled={!run.states?.auto}><Download size={12} /> Load</button>
+                </div>
                 {['1', '2', '3'].map((slot) => {
                   const meta = run.states?.[slot]
                   return (
@@ -214,7 +294,8 @@ export default function EmulatorPanel({ run, setRun }) {
               </div>
               {stateMsg && <p className="map-tip">{stateMsg}</p>}
               <p className="map-tip">
-                States are stored with the run on the server — reliable across restarts. The game keeps running if you switch back to the dashboard view.
+                The Auto slot updates on every in-game save (plus every 3 minutes) and resumes automatically when you start the game.
+                Manual slots and local .srm/.state downloads are your explicit checkpoints.
               </p>
             </>
           )}

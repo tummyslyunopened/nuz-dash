@@ -453,6 +453,32 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 .runner-card { align-items: flex-start; }
 .runner-stream { flex: none; }
 
+.watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.watch-tile {
+  display: block;
+  text-decoration: none;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+  transition: border-color 0.15s;
+}
+.watch-tile:hover { border-color: var(--accent); }
+.watch-tile .stream-view { border-radius: 0; }
+.watch-tile .wt-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 9px;
+  font-size: 12.5px;
+}
+.watch-tile .wt-stats { color: var(--muted); font-size: 11.5px; }
+
 /* ---------- Bug report ---------- */
 .bug-fab {
   position: fixed;

@@ -32,6 +32,12 @@ export const rememberLink = (token, label) => {
 export const knownLinks = () => {
   try { return JSON.parse(localStorage.getItem('nuz-links') || '[]') } catch { return [] }
 }
+export const forgetLink = (token) => {
+  try {
+    const links = JSON.parse(localStorage.getItem('nuz-links') || '[]').filter((l) => l.token !== token)
+    localStorage.setItem('nuz-links', JSON.stringify(links))
+  } catch { /* nothing to forget */ }
+}
 
 export const spriteUrl = (id, shiny = false) =>
   id ? `/api/sprite/${id}${shiny ? '?shiny=1' : ''}` : null

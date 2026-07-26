@@ -1,0 +1,3 @@
+# Excluded from release archives (git archive / release source zips)
+site/ export-ignore
+.gitattributes export-ignore

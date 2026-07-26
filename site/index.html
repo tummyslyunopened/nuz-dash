@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nuz-Dash — run your own multiplayer Nuzlocke server</title>
+<meta name="description" content="Nuz-Dash is a self-hosted multiplayer Pokemon Nuzlocke platform: browser emulator, automatic encounter tracking, live watch party. Create a lobby, invite friends with a link, race your runs.">
+<meta name="theme-color" content="#0c0a12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%238b5cf6'/%3E%3Crect x='2' y='14' width='28' height='4' fill='%230c0a12'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%230c0a12'/%3E%3Ccircle cx='16' cy='16' r='3' fill='white'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --page:#0c0a12; --surface:#16121f; --surface2:#1f1930; --text:#f4f1fb; --text2:#c9c3dc;
+    --muted:#8d86a3; --border:rgba(196,181,253,.14); --accent:#8b5cf6; --accent-strong:#7c3aed;
+  }
+  * { box-sizing:border-box }
+  body {
+    margin:0; color:var(--text); font:15px/1.55 system-ui,'Segoe UI',sans-serif;
+    background:
+      radial-gradient(1100px 560px at 85% -10%, rgba(124,58,237,.18), transparent 60%),
+      radial-gradient(900px 520px at -10% 40%, rgba(139,92,246,.10), transparent 55%),
+      var(--page);
+  }
+  a { color:#b7a4f7 }
+  .wrap { max-width:1060px; margin:0 auto; padding:0 20px }
+  nav { display:flex; align-items:center; gap:10px; padding:18px 0 }
+  nav .brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:17px; color:var(--text); text-decoration:none }
+  nav .spacer { flex:1 }
+  nav a.gh { color:var(--text2); text-decoration:none; font-size:14px }
+  .ball { width:28px; height:28px; border-radius:9px; background:linear-gradient(135deg,#8b5cf6,#4c1d95); display:inline-flex; align-items:center; justify-content:center }
+  .ball svg { width:16px; height:16px }
+  .hero { text-align:center; padding:58px 0 34px }
+  .hero h1 {
+    margin:0 0 14px; font-size:clamp(34px, 6vw, 56px); letter-spacing:-.02em; line-height:1.1;
+    background:linear-gradient(90deg,#d8ccff,#a78bfa 55%,#7c3aed);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .hero p { color:var(--text2); font-size:18px; max-width:640px; margin:0 auto 26px }
+  .cta { display:flex; gap:12px; justify-content:center; flex-wrap:wrap }
+  .btn {
+    display:inline-block; padding:12px 22px; border-radius:12px; text-decoration:none; font-weight:650; font-size:15px;
+    background:linear-gradient(135deg,#8b5cf6,#6d28d9); color:#fff; border:1px solid transparent;
+  }
+  .btn:hover { background:linear-gradient(135deg,#9d71f8,#7c3aed) }
+  .btn.ghost { background:transparent; color:var(--text); border:1px solid var(--border) }
+  .btn.ghost:hover { border-color:var(--accent) }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; margin:34px 0 }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:16px 17px }
+  .card h3 { margin:0 0 6px; font-size:15px }
+  .card p { margin:0; color:var(--muted); font-size:13px }
+  .card .em { font-size:20px; margin-bottom:8px; display:inline-flex; padding:6px 8px; border-radius:10px; background:rgba(139,92,246,.16) }
+  h2.sec { font-size:24px; margin:46px 0 6px; letter-spacing:-.01em }
+  .sec-sub { color:var(--muted); margin:0 0 18px }
+  .steps { counter-reset:step; display:grid; gap:10px }
+  .step { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px 14px 54px; position:relative }
+  .step::before {
+    counter-increment:step; content:counter(step);
+    position:absolute; left:14px; top:14px; width:26px; height:26px; border-radius:50%;
+    background:var(--accent); color:#fff; font-weight:700; font-size:13px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .step h3 { margin:0 0 6px; font-size:15px }
+  .step p { margin:0 0 6px; color:var(--text2); font-size:13.5px }
+  pre {
+    background:#0f0c18; border:1px solid var(--border); border-radius:9px; padding:11px 14px;
+    overflow-x:auto; font-size:13px; margin:8px 0 2px; color:#d6ceef;
+  }
+  pre .c { color:var(--muted) }
+  .faq details { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:13px 16px; margin-bottom:8px }
+  .faq summary { cursor:pointer; font-weight:650; font-size:14.5px }
+  .faq p { color:var(--text2); font-size:13.5px; margin:10px 0 0 }
+  footer { border-top:1px solid var(--border); margin-top:56px; padding:26px 0 40px; color:var(--muted); font-size:12.5px; text-align:center }
+  footer p { margin:4px 0 }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="/">
+      <span class="ball"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="#fff" opacity=".9"/><rect x="2" y="14" width="28" height="4" fill="#0c0a12"/><circle cx="16" cy="16" r="5" fill="#0c0a12"/><circle cx="16" cy="16" r="3" fill="#fff"/></svg></span>
+      Nuz-Dash
+    </a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/tummyslyunopened/nuz-dash">GitHub →</a>
+  </nav>
+
+  <section class="hero">
+    <h1>Race Nuzlockes with your friends.<br>On your own server.</h1>
+    <p>
+      Nuz-Dash is a self-hosted multiplayer Nuzlocke platform: play in the browser, let the tracker
+      log encounters straight from the game's memory, and watch everyone's runs live — side by side.
+      No accounts. Invite links are all it takes.
+    </p>
+    <div class="cta">
+      <a class="btn" href="downloads/nuz-dash-latest.zip" download>⬇ Download Nuz-Dash v2.1.0</a>
+      <a class="btn ghost" href="#selfhost">Self-host guide</a>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><span class="em">🎮</span><h3>Play in the browser</h3><p>Built-in GB / GBA / NDS emulator (EmulatorJS). Bring your own legally-dumped ROM — patched ROM hacks welcome. Save states live on the server and resume automatically.</p></div>
+    <div class="card"><span class="em">📡</span><h3>Encounter radar</h3><p>Wild battles are detected from the running game's memory — species, level, shiny — and logged with one click. Works with pokeemerald-expansion hacks, fakemon included.</p></div>
+    <div class="card"><span class="em">❤️</span><h3>Live party sync</h3><p>Team, HP bars, and faint alerts parsed straight from the battery save. Deaths flow into the tracker with a cause-of-death note. Auto backups on every in-game save.</p></div>
+    <div class="card"><span class="em">👀</span><h3>Watch party</h3><p>Every runner streams their game to the lobby. Watch friends' runs — and their wipes — live while you play yours.</p></div>
+    <div class="card"><span class="em">🗺️</span><h3>Self-drawing route map</h3><p>Locations appear on a map as you play, colored by encounter status. Dupes clause, shiny clause, and hardcore level caps built in.</p></div>
+    <div class="card"><span class="em">🏁</span><h3>Attempts &amp; history</h3><p>When a run dies, restart into a fresh numbered attempt. Every past attempt — encounters, graveyard, diary — stays browsable forever.</p></div>
+  </section>
+
+  <h2 class="sec" id="selfhost">Run your own server</h2>
+  <p class="sec-sub">One machine hosts; everyone else just opens a link. Windows, macOS, and Linux.</p>
+
+  <div class="steps">
+    <div class="step">
+      <h3>Install Node.js</h3>
+      <p>Nuz-Dash needs <a href="https://nodejs.org">Node.js</a> 20 or newer. Check with:</p>
+      <pre>node --version</pre>
+    </div>
+    <div class="step">
+      <h3>Download &amp; build</h3>
+      <p><a href="downloads/nuz-dash-latest.zip" download>Download the latest release</a> and extract it anywhere, then in that folder:</p>
+      <pre>npm install
+npm run build
+npm start</pre>
+      <p>Open <code>http://localhost:4517</code> — create your lobby and you're the first runner.</p>
+    </div>
+    <div class="step">
+      <h3>Go public with a Cloudflare Tunnel</h3>
+      <p>To let friends join over the internet, install <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/">cloudflared</a> (drop the binary into a <code>tools/</code> folder next to the app, or put it on your PATH). Then open the admin dashboard at <code>http://localhost:4518</code> and hit <b>Start tunnel</b> — or enable auto-start so it comes up with the server.</p>
+      <p>Every invite link you copy automatically uses the public tunnel address.</p>
+    </div>
+    <div class="step">
+      <h3>Invite your runners</h3>
+      <p>Copy the invite link from your lobby page and send it privately. Each joiner picks a name and gets their own secret link — that link <em>is</em> their login, so it should be treated like a password. Lost links can be regenerated by any lobby member or from the admin dashboard.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">FAQ</h2>
+  <div class="faq">
+    <details>
+      <summary>Where do ROMs come from?</summary>
+      <p>You. Nuz-Dash ships zero game files — each lobby's host uploads their own legally-dumped ROM (patched hacks included). The ROM stays on the host's machine and is served only to lobby members.</p>
+    </details>
+    <details>
+      <summary>Where is my data stored?</summary>
+      <p>Everything lives in <code>server/data/</code> on the host machine as plain JSON plus your ROMs, save states, and sprites. Back up that folder and you've backed up every run. Runners also get automatic local <code>.srm</code> + <code>.state</code> downloads on every in-game save.</p>
+    </details>
+    <details>
+      <summary>How does login work with no accounts?</summary>
+      <p>Secret links. Creating or joining a lobby mints a personal URL containing a random token — possession of the link is the identity. Share invite links privately, bookmark your personal link, and rotate it anytime if it leaks.</p>
+    </details>
+    <details>
+      <summary>Which games are supported?</summary>
+      <p>The emulator covers Game Boy, Game Boy Color, Game Boy Advance, and Nintendo DS. Deep integration — encounter radar, live party, auto backups — currently supports Gen 3 (Ruby/Sapphire/Emerald/FireRed/LeafGreen) and hacks built on them, including pokeemerald-expansion-based hacks. The manual tracker supports all 21 mainline games.</p>
+    </details>
+    <details>
+      <summary>How do I update?</summary>
+      <p>Download the newest release over your install (or <code>git pull</code>), then <code>npm install &amp;&amp; npm run build</code> and restart. Your <code>server/data/</code> folder is untouched, and data migrations run automatically on boot.</p>
+    </details>
+  </div>
+
+  <footer>
+    <p><a href="https://github.com/tummyslyunopened/nuz-dash">Source on GitHub</a> · emulator by <a href="https://emulatorjs.org">EmulatorJS</a> (GPLv3) · Pokemon data via <a href="https://pokeapi.co">PokeAPI</a></p>
+    <p>Nuz-Dash is a fan-made tool, not affiliated with or endorsed by Nintendo, Game Freak, or The Pokemon Company. Bring your own legally-obtained game files.</p>
+  </footer>
+</div>
+</body>
+</html>

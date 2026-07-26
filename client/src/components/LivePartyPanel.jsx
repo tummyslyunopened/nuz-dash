@@ -3,7 +3,7 @@ import { HeartPulse, RefreshCw, FileUp } from 'lucide-react'
 import { spriteUrl, titleCase } from '../api.js'
 import { parseGen3Save } from '../gen3save.js'
 import { loadIndex } from './PokemonSearch.jsx'
-import { readEmulatorSave, emulatorRunning } from './EmulatorPanel.jsx'
+import { readEmulatorSave, emulatorRunning, pushAutoState } from './EmulatorPanel.jsx'
 import { findSpeciesTable, speciesTableName } from '../gen3ram.js'
 
 const hpClass = (hp, maxHp) => {
@@ -91,7 +91,8 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
       downloadBlob(savBytes, `${slug}-save${saveIndex}-${stampStr}.srm`)
       const gm = window.EJS_emulator?.gameManager
       if (gm) downloadBlob(gm.getState(), `${slug}-save${saveIndex}-${stampStr}.state`)
-      setBackupMsg(`In-game save #${saveIndex} detected — downloaded .srm + .state backups.`)
+      if (run?.id) pushAutoState(run.id) // refresh the server's auto-resume state too
+      setBackupMsg(`In-game save #${saveIndex} detected — downloaded .srm + .state backups and updated the server auto state.`)
     } catch (err) {
       setBackupMsg(`Auto-backup failed: ${err.message}`)
     }

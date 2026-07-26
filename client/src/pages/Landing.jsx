@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Radar, Gamepad2, Map, Users, HeartPulse, BookOpen, Plus, KeyRound, Swords } from 'lucide-react'
-import { api, rememberLink, knownLinks } from '../api.js'
+import { Radar, Gamepad2, Map, Users, HeartPulse, BookOpen, Plus, KeyRound, Swords, X } from 'lucide-react'
+import { api, rememberLink, knownLinks, forgetLink } from '../api.js'
 
 const FEATURES = [
   { icon: Gamepad2, title: 'Play in the browser', text: 'Built-in GB/GBA/NDS emulator with your own patched ROMs, save-state slots, and automatic .srm/.state backups on every in-game save.' },
@@ -16,8 +16,14 @@ export default function Landing() {
   const [lobbyName, setLobbyName] = useState('')
   const [runnerName, setRunnerName] = useState('')
   const [error, setError] = useState('')
+  const [links, setLinks] = useState(knownLinks)
   const navigate = useNavigate()
-  const links = knownLinks()
+
+  const removeLink = (l) => {
+    if (!window.confirm(`Remove "${l.label || 'this lobby'}" from this device? The lobby itself is untouched — you can get back in with the link or by re-joining via invite.`)) return
+    forgetLink(l.token)
+    setLinks(knownLinks())
+  }
 
   const create = async (e) => {
     e.preventDefault()
@@ -79,6 +85,8 @@ export default function Landing() {
                   <Link to={`/m/${l.token}`}>{l.label || 'Lobby'}</Link>
                   <div className="sub">last opened {new Date(l.at).toLocaleDateString()}</div>
                 </div>
+                <span className="spacer" />
+                <button className="small danger" title="Remove from this device" onClick={() => removeLink(l)}><X size={12} /></button>
               </div>
             ))
           )}
