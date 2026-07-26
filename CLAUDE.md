@@ -1,0 +1,127 @@
+# Nuz-Dash — agent guide
+
+Multiplayer Pokemon Nuzlocke platform: browser emulator + auto-tracking + watch
+party. One machine hosts (this one); players join via secret links. No accounts.
+
+> **Read `CLAUDE.local.md` first when working on the primary dev machine** —
+> it holds host-machine gotchas (Windows ARM64, PATH refresh, wrangler pin),
+> tunnel hostnames, and account specifics. It is gitignored; keep it that way.
+
+## Architecture
+
+Two-process-free monolith: `server/server.js` (Express, ESM) serves the API, the
+built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
+
+- **Main app**: `http://localhost:4517`, optionally public via the built-in
+  Cloudflare tunnel manager (quick or named mode; auto-start in settings).
+  Onboarding site: **nuzdash.dev** (Cloudflare Pages, source in `site/`).
+- **Admin app**: `http://localhost:4518`, bound 127.0.0.1 ONLY (never tunneled).
+  `server/admin.html` (vanilla JS). Manages lobbies/members/bug reports/tunnel.
+
+### Data model (JSON stores in `server/data/`, see `server/store.js`)
+
+- `lobbies.json`: lobby { id, name, inviteToken, roms:[max ONE rom] }. Upload
+  replaces the rom in place keeping its id (attempts stay linked).
+- `members.json`: member { id, token, lobbyId, name, controls }. **token in the
+  URL /m/<token> IS the auth** — sent as `X-Member-Token` header (or `?token=`
+  query for fetches that can't set headers: EmulatorJS ROM fetch). Any lobby
+  member can regenerate any member's token (link recovery).
+- `runs.json`: a "run" = one ATTEMPT { memberId, lobbyId, attemptNumber, status
+  active|archived, gameId, romId, rules, badges, caps, states meta }. One active
+  per member; POST /api/runs archives the previous active.
+- `encounters.json` / `diary.json`: keyed by runId.
+- `maps.json`: keyed `` `${lobbyId}|${gameId}` `` (image + pins + nodes).
+- `settings.json`: { autoTunnel, tunnelMode quick|named, tunnelName,
+  tunnelHostname }.
+- Binary dirs under server/data: roms/, states/ (`<runId>-<slot>.state`, slots
+  1,2,3,auto), sprites/ (proxy cache), dumps/ (heap dumps), bugreports/.
+- Save-state "auto" slot: pushed by client on detected in-game saves + 3-min
+  heartbeat; newest server state auto-loads on game start.
+- Live streams: in-memory Map only (memberId → jpeg frame), never persisted.
+
+### Client (`client/`, React + Vite, no TS)
+
+- Routes: `/` Landing, `/join/:invite`, `/m/:token` LobbyHome,
+  `/m/:token/run/:id` RunPage (Play view default), `/m/:token/view/:memberId`
+  Spectator. `MemberScope` in App.jsx sets the api token from the URL.
+- `api.js`: fetch helpers + auth header + STATUS_META + localStorage lobby links.
+- Key components: EmulatorPanel (EmulatorJS boot, state slots, streaming
+  broadcast, controller sync, auto-resume), LivePartyPanel (save polling,
+  faint alerts, auto backups), EncounterRadar (live memory scanning),
+  WatchPartyPanel, StreamView, MapPanel/RouteMap, EncountersPanel, BugReportButton.
+- **Design system**: purple tokens in styles.css (`--accent:#8b5cf6` etc.).
+  Status colors are FIXED (good #0ca30c / warning #fab219 / serious #ec835a /
+  critical #d03b3b) — never retheme them; always pair color with icon+label.
+  Icons: lucide-react. Form-control CSS is scoped `:where(:not(#ejs-mount *))`
+  so it never leaks into EmulatorJS UI — keep any new global element styles
+  scoped the same way.
+
+### Emulator integration (the tricky part)
+
+- EmulatorJS v4.2.3 vendored in `server/emulatorjs-data/` (runtime + gambatte/
+  mgba/melonds cores incl. -thread/-legacy variants). Served at `/emulatorjs`.
+  The SPA fallback regex MUST keep excluding `/emulatorjs` or missing files get
+  index.html and the emulator breaks mysteriously.
+- Boot: set `window.EJS_*` globals then inject `/emulatorjs/loader.js`. Emulator
+  can't be torn down — panels stay mounted and views hide via CSS.
+- gameManager API (on `window.EJS_emulator.gameManager`): `getState()` (sync
+  Uint8Array), `loadState(bytes)`, `getSaveFile()` (battery save),
+  `Module.HEAPU8` (entire WASM heap — basis of the radar).
+- **Gen 3 parsing** (`client/src/gen3save.js`): battery save → party. Vanilla
+  encryption/shuffle (checksum-verified in analysis); substructure order =
+  personality % 24; species field masks `& 0x7FF` (expansion hacks pack flags
+  in top bits).
+- **Radar** (`client/src/gen3ram.js`): self-calibrating — scans heap for synced
+  party (personality,otId) pairs; enemy party is ±600 bytes from player party;
+  species names read from the ROM's own table in memory (find "Bulbasaur",
+  stride 260 = pokeemerald-expansion gSpeciesInfo, 11 = vanilla names array).
+  NO hardcoded emulator or per-game addresses — keep it that way.
+- Expansion-hack species enums are the hack's own (often natdex-ordered with
+  forms appended) — never assume PokeAPI ids match; resolve via the ROM table.
+- Debug tools already built in: radar Diagnostics panel, Deep scan (during
+  battle), heap dump → `server/data/dumps/` (+ meta json). Past analysis
+  scripts pattern: load dump in node, reuse gen3ram/gen3save pure functions
+  (`calibrateIn`, `scanEnemiesIn`, `parseMonAt`, `findSpeciesTableIn`).
+
+## Commands
+
+```
+npm run build         # build client to dist/ (needed before restart if client changed)
+npm start             # server (main 4517 + admin 4518 + tunnel if autoTunnel)
+npm run dev           # vite dev on 5173 + server (proxy in vite.config.js)
+npm test              # unit tests for save parser + radar (tests/)
+npm run site:preview  # deploy onboarding site to preview channel (safe)
+npm run site:deploy   # deploy onboarding site to production (nuzdash.dev)
+node tools/serve-site.mjs   # local site preview on 8790
+```
+
+## Workflows
+
+- **Release** (see `release` skill): commit → tag vX.Y.Z → push --tags →
+  `git archive` zip → `gh release create`. `.gitattributes` export-ignores
+  `site/` so releases never contain the site. Site download buttons point at
+  `releases/latest` — no per-release site edits needed.
+- **Site deploys**: pre-push hook (`.githooks/`, hooksPath configured) publishes
+  automatically when pushed commits touch `site/`. Never blocks the push.
+- **Server data changes**: stores load at boot; ad-hoc edits to server/data
+  JSON while the server runs get clobbered on next save. Startup migrations
+  live near the top of server.js (single-user→lobby, multi-rom→single-rom).
+- **Verifying changes**: API smoke tests via PowerShell Invoke-RestMethod work
+  well (create lobby → member token → exercise endpoints → delete). WASM/
+  emulator behavior can't be tested headless — ask the user to check and report
+  the radar Diagnostics text or a bug report (admin dashboard shows them).
+
+## Conventions & cautions
+
+- ROMs are copyrighted: `server/data/` is gitignored — never commit or upload
+  its contents anywhere.
+- Commit messages end with the Co-Authored-By Claude trailer; commit/push only
+  when the user asks.
+- Auth checks live server-side in `requireMember` + `ownRun`/`findRun` helpers:
+  reads are lobby-wide (spectating), writes are owner-only. Keep new endpoints
+  consistent.
+- Secret tokens must never appear in logs/bug reports (diagnostics.js redacts)
+  or in <img> URLs (StreamView fetches with headers + object URLs).
+- GitHub repo: `tummyslyunopened/nuz-dash` (public). Releases via `gh` CLI.
+- `CLAUDE.local.md` and `server/data/` are private — never commit them or echo
+  their contents into committed files, release notes, or the public site.

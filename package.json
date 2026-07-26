@@ -9,7 +9,8 @@
     "build": "vite build",
     "start": "node server/server.js",
     "site:deploy": "node scripts/deploy-site.mjs",
-    "site:preview": "node scripts/deploy-site.mjs --preview"
+    "site:preview": "node scripts/deploy-site.mjs --preview",
+    "test": "node tests/gen3save.test.mjs && node tests/gen3ram.test.mjs"
   },
   "dependencies": {
     "express": "^4.19.2",

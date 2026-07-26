@@ -7,5 +7,6 @@ server/data/
 
 .claude/settings.local.json
 tools/
+CLAUDE.local.md
 
 *.log
