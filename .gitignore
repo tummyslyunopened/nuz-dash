@@ -6,5 +6,6 @@ dist/
 server/data/
 
 .claude/settings.local.json
+tools/
 
 *.log

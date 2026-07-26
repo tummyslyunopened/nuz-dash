@@ -1,4 +1,6 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { Gamepad2, Radio, Play, Save, Download, Upload } from 'lucide-react'
+import { authHeaders, memberToken } from '../api.js'
 
 // Pull the current battery save out of the running EmulatorJS instance.
 // API surface differs slightly between versions, so probe defensively.
@@ -37,7 +39,40 @@ export default function EmulatorPanel({ run, setRun }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [stateMsg, setStateMsg] = useState('')
+  const [streaming, setStreaming] = useState(true)
   const fileRef = useRef(null)
+
+  // Watch-party broadcast: copy the emulator canvas to JPEG (~2fps) and push
+  // the latest frame to the server for lobby-mates to watch. drawImage runs
+  // inside requestAnimationFrame so the WebGL buffer is still valid.
+  useEffect(() => {
+    if (!started || !streaming) return
+    const off = document.createElement('canvas')
+    let inFlight = false
+    const tick = () => {
+      if (inFlight) return
+      requestAnimationFrame(() => {
+        try {
+          const src = window.EJS_emulator?.canvas || document.querySelector('#ejs-mount canvas')
+          if (!src || !src.width) return
+          off.width = src.width
+          off.height = src.height
+          off.getContext('2d').drawImage(src, 0, 0)
+          off.toBlob((blob) => {
+            if (!blob || !blob.size) return
+            inFlight = true
+            fetch('/api/stream', {
+              method: 'POST',
+              headers: { 'Content-Type': 'image/jpeg', ...authHeaders() },
+              body: blob
+            }).catch(() => {}).finally(() => { inFlight = false })
+          }, 'image/jpeg', 0.7)
+        } catch { /* skip frame */ }
+      })
+    }
+    const t = setInterval(tick, 500)
+    return () => clearInterval(t)
+  }, [started, streaming, run.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveState = async (slot) => {
     setStateMsg('')
@@ -47,7 +82,7 @@ export default function EmulatorPanel({ run, setRun }) {
       const bytes = gm.getState()
       const res = await fetch(`/api/runs/${run.id}/states/${slot}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: { 'Content-Type': 'application/octet-stream', ...authHeaders() },
         body: bytes
       })
       if (!res.ok) throw new Error((await res.json()).error || `${res.status}`)
@@ -63,7 +98,7 @@ export default function EmulatorPanel({ run, setRun }) {
     try {
       const gm = window.EJS_emulator?.gameManager
       if (!gm) throw new Error('game is not running')
-      const res = await fetch(`/api/runs/${run.id}/states/${slot}`)
+      const res = await fetch(`/api/runs/${run.id}/states/${slot}`, { headers: authHeaders() })
       if (res.status === 404) throw new Error('slot is empty')
       if (!res.ok) throw new Error(`${res.status}`)
       gm.loadState(new Uint8Array(await res.arrayBuffer()))
@@ -79,7 +114,7 @@ export default function EmulatorPanel({ run, setRun }) {
     try {
       const res = await fetch(`/api/runs/${run.id}/rom?filename=${encodeURIComponent(file.name)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: { 'Content-Type': 'application/octet-stream', ...authHeaders() },
         body: file
       })
       if (!res.ok) throw new Error((await res.json()).error || `${res.status}`)
@@ -96,8 +131,8 @@ export default function EmulatorPanel({ run, setRun }) {
       setError('Reload the page first to stop the emulator, then remove the ROM.')
       return
     }
-    if (!window.confirm(`Remove ${run.rom.name}?`)) return
-    const res = await fetch(`/api/runs/${run.id}/rom`, { method: 'DELETE' })
+    if (!window.confirm(`Unlink ${run.rom.name} from this attempt? (It stays in the lobby library.)`)) return
+    const res = await fetch(`/api/runs/${run.id}/rom`, { method: 'DELETE', headers: authHeaders() })
     setRun(await res.json())
   }
 
@@ -105,7 +140,8 @@ export default function EmulatorPanel({ run, setRun }) {
     window.EJS_player = '#ejs-mount'
     window.EJS_core = run.rom.core
     window.EJS_gameName = run.rom.name.replace(/\.[^.]+$/, '')
-    window.EJS_gameUrl = `/api/runs/${run.id}/rom`
+    // EmulatorJS fetches the ROM itself and can't send headers — pass the token as a query param
+    window.EJS_gameUrl = `/api/runs/${run.id}/rom?token=${memberToken}`
     window.EJS_pathtodata = '/emulatorjs/'
     window.EJS_startOnLoaded = true
     window.EJS_backgroundColor = '#0d0d0d'
@@ -119,9 +155,16 @@ export default function EmulatorPanel({ run, setRun }) {
   return (
     <div className="panel">
       <h2>
-        Game
+        <span className="h2-title"><Gamepad2 size={14} /> Game</span>
         {run.rom && (
           <span className="h-actions">
+            {started && (
+              <button
+                className={`small ${streaming ? 'primary' : ''}`}
+                onClick={() => setStreaming((s) => !s)}
+                title="Broadcast your game to lobby-mates"
+              ><Radio size={12} /> {streaming ? 'Streaming' : 'Stream off'}</button>
+            )}
             <span className="chip">{run.rom.name} · {fmtSize(run.rom.size)} · {run.rom.core.toUpperCase()}</span>
             <button className="small" onClick={() => fileRef.current?.click()} disabled={busy || started}>Replace</button>
             <button className="small danger" onClick={removeRom} disabled={busy}>Remove</button>
@@ -137,10 +180,10 @@ export default function EmulatorPanel({ run, setRun }) {
       />
       {!run.rom ? (
         <div className="map-upload">
-          <p>Upload your own legally-dumped ROM — patched ROM hacks welcome (.gb / .gbc / .gba / .nds, unzipped).</p>
-          <p>It's stored locally in <code>server/data/roms</code> and never leaves your machine.</p>
+          <p>No ROM linked to this attempt. Pick one from the lobby's ROM library when starting an attempt, or upload one here (it's added to the lobby library).</p>
+          <p>Legally-dumped ROMs only — patched ROM hacks welcome (.gb / .gbc / .gba / .nds, unzipped).</p>
           <button className="primary" onClick={() => fileRef.current?.click()} disabled={busy}>
-            {busy ? 'Uploading…' : 'Upload ROM'}
+            <Upload size={14} /> {busy ? 'Uploading…' : 'Upload ROM'}
           </button>
         </div>
       ) : (
@@ -148,7 +191,7 @@ export default function EmulatorPanel({ run, setRun }) {
           {!started && (
             <div className="map-upload">
               <p>{run.rom.name} is ready.</p>
-              <button className="primary" onClick={start}>▶ Start game</button>
+              <button className="primary" onClick={start}><Play size={14} /> Start game</button>
             </div>
           )}
           <div id="ejs-mount" className="ejs-mount" style={{ display: started ? 'block' : 'none' }} />
@@ -163,8 +206,8 @@ export default function EmulatorPanel({ run, setRun }) {
                         Slot {slot}
                         <span className="ss-meta">{meta ? ` · ${timeAgo(meta.savedAt)}` : ' · empty'}</span>
                       </span>
-                      <button className="small" onClick={() => saveState(slot)}>Save</button>
-                      <button className="small" onClick={() => loadState(slot)} disabled={!meta}>Load</button>
+                      <button className="small" onClick={() => saveState(slot)}><Save size={12} /> Save</button>
+                      <button className="small" onClick={() => loadState(slot)} disabled={!meta}><Download size={12} /> Load</button>
                     </div>
                   )
                 })}

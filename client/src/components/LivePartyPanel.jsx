@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { HeartPulse, RefreshCw, FileUp } from 'lucide-react'
 import { spriteUrl, titleCase } from '../api.js'
 import { parseGen3Save } from '../gen3save.js'
 import { loadIndex } from './PokemonSearch.jsx'
@@ -154,13 +155,13 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
   return (
     <div className="panel">
       <h2>
-        Live party <span style={{ textTransform: 'none', letterSpacing: 0 }}>{game && `· ${game}`}</span>
+        <span className="h2-title"><HeartPulse size={14} /> Live party</span> <span style={{ textTransform: 'none', letterSpacing: 0 }}>{game && `· ${game}`}</span>
         <span className="h-actions">
           <label style={{ fontSize: 12, display: 'inline-flex', gap: 5, alignItems: 'center', textTransform: 'none', letterSpacing: 0 }}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto (10s)
           </label>
-          <button className="small" onClick={() => fileRef.current?.click()} title="Parse a .sav file from any emulator">Load .sav</button>
-          <button className="small primary" onClick={syncFromEmulator}>Sync from game</button>
+          <button className="small" onClick={() => fileRef.current?.click()} title="Parse a .sav file from any emulator"><FileUp size={12} /> Load .sav</button>
+          <button className="small primary" onClick={syncFromEmulator}><RefreshCw size={12} /> Sync from game</button>
         </span>
       </h2>
       <input

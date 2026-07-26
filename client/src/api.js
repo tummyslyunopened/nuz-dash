@@ -7,13 +7,30 @@ async function handle(res) {
   return res.json()
 }
 
-const jsonHeaders = { 'Content-Type': 'application/json' }
+// Member token: personal secret from the /m/<token> URL — it IS the auth.
+export let memberToken = null
+export const setMemberToken = (t) => { memberToken = t || null }
+export const authHeaders = () => (memberToken ? { 'X-Member-Token': memberToken } : {})
+
+const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...authHeaders() })
 
 export const api = {
-  get: (url) => fetch(url).then(handle),
-  post: (url, body) => fetch(url, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }).then(handle),
-  put: (url, body) => fetch(url, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }).then(handle),
-  del: (url) => fetch(url, { method: 'DELETE' }).then(handle)
+  get: (url) => fetch(url, { headers: authHeaders() }).then(handle),
+  post: (url, body) => fetch(url, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) }).then(handle),
+  put: (url, body) => fetch(url, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(body) }).then(handle),
+  del: (url) => fetch(url, { method: 'DELETE', headers: authHeaders() }).then(handle)
+}
+
+// Remember lobby links visited on this device (pure convenience, not auth)
+export const rememberLink = (token, label) => {
+  try {
+    const links = JSON.parse(localStorage.getItem('nuz-links') || '[]').filter((l) => l.token !== token)
+    links.unshift({ token, label, at: Date.now() })
+    localStorage.setItem('nuz-links', JSON.stringify(links.slice(0, 10)))
+  } catch { /* private mode etc. */ }
+}
+export const knownLinks = () => {
+  try { return JSON.parse(localStorage.getItem('nuz-links') || '[]') } catch { return [] }
 }
 
 export const spriteUrl = (id, shiny = false) =>

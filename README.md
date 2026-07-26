@@ -1,7 +1,8 @@
 # Nuz-Dash
 
-A second-screen Pokemon Nuzlocke companion. Runs locally — no accounts, works on any
-browser on your network.
+A multiplayer Pokemon Nuzlocke run platform. Create a lobby, invite friends with a
+link, and race runs side by side — emulator, tracker, and watch party in one screen.
+No accounts: personal secret links are the only auth.
 
 ## Run it
 
@@ -53,6 +54,21 @@ For development with hot reload: `npm run dev` (client on http://localhost:5173)
   shinies. Newly-fainted Pokemon trigger a "mark dead in tracker" prompt, and any
   party member can be imported as a caught encounter with one click. A `.sav` file
   from a desktop emulator can be loaded manually too.
+
+## Deploying / sharing beyond localhost
+
+The server binds locally; to let friends join over the internet, put a Cloudflare
+Tunnel in front of it:
+
+```
+cloudflared tunnel --url http://localhost:4517     # quick tunnel, random *.trycloudflare.com URL
+```
+
+The printed URL is your public instance — share invite links based on it. Quick
+tunnels get a new URL each start; for a stable hostname, create a named tunnel on a
+Cloudflare-managed domain (`cloudflared tunnel create nuz-dash`, route a DNS record,
+then `cloudflared tunnel run`). Remember: secret links are the only auth, so share
+them like passwords.
 
 ## Data
 

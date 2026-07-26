@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { Crosshair } from 'lucide-react'
 import { api, spriteUrl, titleCase, STATUS_META, encounterState } from '../api.js'
 import PokemonSearch from './PokemonSearch.jsx'
 
@@ -101,7 +102,7 @@ export default function EncountersPanel({ run, encounters, setEncounters, locati
 
   return (
     <div className="panel">
-      <h2>Encounters</h2>
+      <h2><span className="h2-title"><Crosshair size={14} /> Encounters</span></h2>
       <form className="enc-form" onSubmit={addEncounter}>
         <input
           list="location-options"

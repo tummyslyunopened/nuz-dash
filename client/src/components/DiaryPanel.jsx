@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { BookOpen } from 'lucide-react'
 import { api } from '../api.js'
 
 export default function DiaryPanel({ run, locations }) {
@@ -27,7 +28,7 @@ export default function DiaryPanel({ run, locations }) {
 
   return (
     <div className="panel">
-      <h2>Run diary</h2>
+      <h2><span className="h2-title"><BookOpen size={14} /> Run diary</span></h2>
       <form className="diary-form" onSubmit={add}>
         <textarea
           placeholder="What just happened? (deaths, clutch catches, near-wipes…)"

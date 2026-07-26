@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { Swords } from 'lucide-react'
 import { api, spriteUrl, titleCase } from '../api.js'
 import { TYPES, TYPE_COLORS, defensiveProfile } from '../typechart.js'
 import PokemonSearch from './PokemonSearch.jsx'
@@ -43,7 +44,7 @@ export default function TypeLookup() {
 
   return (
     <div className="panel type-lookup">
-      <h2>Type matchups</h2>
+      <h2><span className="h2-title"><Swords size={14} /> Type matchups</span></h2>
       <div className="controls">
         <div style={{ flex: 1, minWidth: 180 }}>
           <PokemonSearch value={subject ? titleCase(subject.name) : ''} onSelect={pickPokemon} placeholder="Look up a Pokemon…" />

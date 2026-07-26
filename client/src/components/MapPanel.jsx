@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react'
+import { Map as MapIcon } from 'lucide-react'
 import { api, STATUS_META, encounterState, locationState } from '../api.js'
 import RouteMap from './RouteMap.jsx'
 
@@ -59,7 +60,7 @@ export default function MapPanel({ run, encounters, locations, map, setMap }) {
   return (
     <div className="panel">
       <h2>
-        Route map
+        <span className="h2-title"><MapIcon size={14} /> Route map</span>
         <span className="h-actions">
           {map?.image && (
             <>

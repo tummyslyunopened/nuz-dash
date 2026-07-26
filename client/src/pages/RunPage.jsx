@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { LayoutDashboard, Gamepad2 } from 'lucide-react'
 import { api } from '../api.js'
 import EncountersPanel from '../components/EncountersPanel.jsx'
 import MapPanel from '../components/MapPanel.jsx'
@@ -10,7 +11,7 @@ import LivePartyPanel from '../components/LivePartyPanel.jsx'
 import EncounterRadar from '../components/EncounterRadar.jsx'
 
 export default function RunPage() {
-  const { id } = useParams()
+  const { token, id } = useParams()
   const [run, setRun] = useState(null)
   const [encounters, setEncounters] = useState([])
   const [locations, setLocations] = useState([])
@@ -33,7 +34,7 @@ export default function RunPage() {
     return (
       <div className="app-shell">
         <p className="error-note">{error}</p>
-        <Link to="/" style={{ color: 'var(--accent)' }}>← Back to runs</Link>
+        <Link to={`/m/${token}`} style={{ color: 'var(--accent)' }}>← Back to lobby</Link>
       </div>
     )
   }
@@ -74,14 +75,17 @@ export default function RunPage() {
     <div className="app-shell">
       <div className="run-header">
         <div className="run-title">
-          <h1>{run.name}</h1>
+          <h1>
+            {run.attemptNumber ? `Attempt #${run.attemptNumber} — ` : ''}{run.name}
+            {run.status === 'archived' && <span className="chip" style={{ marginLeft: 8, verticalAlign: 'middle' }}>ARCHIVED</span>}
+          </h1>
           <div className="sub">
-            <Link to="/" style={{ color: 'var(--muted)' }}>← runs</Link> · {run.gameName} · started {new Date(run.createdAt).toLocaleDateString()}
+            <Link to={`/m/${token}`} style={{ color: 'var(--muted)' }}>← lobby</Link> · {run.gameName} · started {new Date(run.createdAt).toLocaleDateString()}
           </div>
         </div>
         <div className="view-toggle">
-          <button className={view === 'dash' ? 'active' : ''} onClick={() => setView('dash')}>Dashboard</button>
-          <button className={view === 'play' ? 'active' : ''} onClick={() => setView('play')}>▶ Play</button>
+          <button className={view === 'dash' ? 'active' : ''} onClick={() => setView('dash')}><LayoutDashboard size={13} /> Dashboard</button>
+          <button className={view === 'play' ? 'active' : ''} onClick={() => setView('play')}><Gamepad2 size={13} /> Play</button>
         </div>
         <div className="stat-tiles">
           <div className="stat-tile">

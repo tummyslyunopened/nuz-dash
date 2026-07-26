@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { Radar, ScanSearch, HardDriveDownload } from 'lucide-react'
 import { api, spriteUrl, titleCase } from '../api.js'
 import { calibrate, scanEnemies, probe, deepScan, dumpHeap, findSpeciesTable, speciesTableName } from '../gen3ram.js'
 import { loadIndex } from './PokemonSearch.jsx'
@@ -227,7 +228,8 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
         method: 'POST',
         headers: {
           'Content-Type': 'application/octet-stream',
-          'X-Dump-Meta': encodeURIComponent(JSON.stringify(meta))
+          'X-Dump-Meta': encodeURIComponent(JSON.stringify(meta)),
+          ...authHeaders()
         },
         body: bytes
       })
@@ -272,7 +274,7 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
   return (
     <div className="panel">
       <h2>
-        Encounter radar
+        <span className="h2-title"><Radar size={14} /> Encounter radar</span>
         <span className="h-actions">
           {watching
             ? <button className="small" onClick={stop}>Stop</button>
@@ -298,8 +300,8 @@ export default function EncounterRadar({ run, encounters, party, locations, onPr
         <details open={debugOpen} onToggle={(e) => setDebugOpen(e.target.open)}>
           <summary className="map-tip" style={{ cursor: 'pointer' }}>Diagnostics</summary>
           <div className="rc-row" style={{ display: 'flex', gap: 6, margin: '6px 0', flexWrap: 'wrap' }}>
-            <button className="small" onClick={runDeepScan}>Deep scan (use during battle)</button>
-            <button className="small" onClick={dump}>Dump memory for analysis</button>
+            <button className="small" onClick={runDeepScan}><ScanSearch size={12} /> Deep scan (use during battle)</button>
+            <button className="small" onClick={dump}><HardDriveDownload size={12} /> Dump memory for analysis</button>
           </div>
           {extraDeltas.length > 0 && (
             <p className="map-tip">Learned offsets: {extraDeltas.map((d) => (d > 0 ? '+' : '') + d).join(', ')}</p>
