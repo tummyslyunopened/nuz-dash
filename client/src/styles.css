@@ -620,6 +620,28 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 .tour-foot { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .tour-progress { color: var(--muted); font-size: 12px; margin-right: auto; }
 
+/* ---------- QR launch ---------- */
+.qr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 380;
+  background: rgba(5, 3, 10, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.qr-modal { position: relative; width: min(360px, 94vw); }
+.qr-body { text-align: center; }
+.qr-body img {
+  width: 220px;
+  height: 220px;
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px;
+  image-rendering: pixelated;
+}
+
 /* ---------- Bug report ---------- */
 .bug-fab {
   position: fixed;

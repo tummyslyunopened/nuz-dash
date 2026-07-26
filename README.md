@@ -48,6 +48,9 @@ For development with hot reload: `npm run dev` (client on http://localhost:5173)
   automatically once the party has synced and self-recovers after save-state loads.
   When a wild battle starts, a confirm card pops up — pick the location and hit
   Caught/Killed/Fled/Missed, or dismiss (trainer battles trigger it too).
+- **Mobile play** — the emulator goes fullscreen on phones with touch controls,
+  and a "Play on phone" QR button on the run page hops your session to mobile
+  instantly (the QR encodes your secret link — scan it yourself only).
 - **Auto backups & resume** — live-party auto-sync is on by default; every new
   in-game save it detects downloads a `.state` backup to your browser and updates
   the server-side auto-save, which loads automatically the next time you start the

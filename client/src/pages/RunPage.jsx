@@ -10,6 +10,7 @@ import EmulatorPanel from '../components/EmulatorPanel.jsx'
 import LivePartyPanel from '../components/LivePartyPanel.jsx'
 import EncounterRadar from '../components/EncounterRadar.jsx'
 import WatchPartyPanel from '../components/WatchPartyPanel.jsx'
+import QrLaunchButton from '../components/QrLaunchButton.jsx'
 
 export default function RunPage() {
   const { token, id } = useParams()
@@ -101,6 +102,7 @@ export default function RunPage() {
           <button className={view === 'dash' ? 'active' : ''} onClick={() => setView('dash')}><LayoutDashboard size={13} /> Dashboard</button>
           <button className={view === 'play' ? 'active' : ''} onClick={() => setView('play')}><Gamepad2 size={13} /> Play</button>
         </div>
+        <QrLaunchButton token={token} runId={run.id} />
         <div className="stat-tiles">
           <div className="stat-tile">
             <div className="value">
