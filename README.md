@@ -137,3 +137,7 @@ location/species has been fetched once the app works offline for it.
 - **Affiliation:** Nuz-Dash is a fan-made tool, not affiliated with or endorsed by
   Nintendo, Game Freak, or The Pokemon Company. Pokemon names and sprites are their
   trademarks and copyrights.
+- **AI disclosure:** Nuz-Dash is developed largely by an AI coding agent (Claude,
+  by Anthropic) working under human direction — commits carry a `Co-Authored-By`
+  trailer reflecting this. Bugs and design decisions are the maintainer's
+  responsibility either way.
