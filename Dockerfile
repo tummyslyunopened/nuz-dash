@@ -16,9 +16,10 @@ RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund
 COPY server ./server
 COPY --from=build /app/dist ./dist
 
-# All persistent data (lobbies, ROMs, saves) lives on the mounted volume
+# All persistent data (lobbies, ROMs, saves) lives at /data — attach the
+# platform's persistent volume there (Railway: Attach Volume, mount /data).
+# No Docker VOLUME directive: Railway's builder rejects it.
 ENV NUZ_DATA_DIR=/data
-VOLUME /data
 
 ENV PORT=4517
 EXPOSE 4517
