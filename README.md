@@ -123,3 +123,17 @@ mounted at `/data` and `ADMIN_TOKEN` set.
 Everything lives in `server/data/` as JSON files (plus uploaded map images) — back up
 that folder to keep your runs. PokeAPI responses are cached there too, so after a
 location/species has been fetched once the app works offline for it.
+
+## Legal
+
+- **License:** Nuz-Dash is free software under the **GPLv3** (see [LICENSE](LICENSE)).
+  It is provided **as-is, without warranty of any kind**. Bundled third-party
+  components and their licenses are listed in
+  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **Game files:** Nuz-Dash ships no ROMs. Hosts and players supply their own
+  legally-obtained game files. A lobby's ROM is served to that lobby's members so
+  everyone runs the same patched game — this is intended for private groups where
+  **each runner owns their own copy of the game**.
+- **Affiliation:** Nuz-Dash is a fan-made tool, not affiliated with or endorsed by
+  Nintendo, Game Freak, or The Pokemon Company. Pokemon names and sprites are their
+  trademarks and copyrights.

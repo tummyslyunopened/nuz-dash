@@ -225,7 +225,7 @@ export default function LobbyHome() {
             <input ref={fileRef} type="file" accept=".gb,.gbc,.sgb,.gba,.nds" style={{ display: 'none' }}
               onChange={(e) => e.target.files[0] && uploadRom(e.target.files[0])} />
             {me.lobby.roms.length === 0 ? (
-              <p className="empty-note">No ROM yet — upload the patched ROM this lobby will race (your own legal dump). One ROM per lobby; everyone runs the same game.</p>
+              <p className="empty-note">No ROM yet — upload the patched ROM this lobby will race. One ROM per lobby; it's served to every runner here, so make sure everyone in the lobby owns their own legal copy of the game.</p>
             ) : (
               <div className="run-card">
                 <div className="info">
