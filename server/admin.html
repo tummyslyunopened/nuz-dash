@@ -44,7 +44,7 @@
 </head>
 <body>
 <h1>Nuz-Dash <span class="tag">ADMIN</span></h1>
-<p class="sub">Bound to 127.0.0.1 — not reachable through the tunnel or LAN. Deletions are immediate and permanent.</p>
+<p class="sub">Local: bound to 127.0.0.1. Cloud: mounted at /admin behind basic auth (ADMIN_TOKEN). Deletions are immediate and permanent.</p>
 
 <h2>Public tunnel</h2>
 <div id="tunnel" class="card"><p class="empty">Loading…</p></div>
@@ -69,6 +69,8 @@ function toast(msg) {
   setTimeout(() => { t.style.display = 'none' }, 3000)
 }
 
+// NOTE: all API paths are RELATIVE ("api/...") so this page works both on the
+// local admin port (/) and mounted under /admin/ on a cloud deployment.
 async function call(method, url, body) {
   const res = await fetch(url, {
     method,
@@ -80,12 +82,15 @@ async function call(method, url, body) {
 }
 
 let publicUrl = null
-const origin = () => publicUrl || `http://${location.hostname}:${mainPort}`
+// On the local admin port, member links point at the main app port; when
+// mounted under /admin on the main app, the current origin already is the app.
+const onMainApp = location.pathname.startsWith('/admin')
+const origin = () => publicUrl || (onMainApp ? location.origin : `http://${location.hostname}:${mainPort}`)
 const memberUrl = (token) => `${origin()}/m/${token}`
 const inviteUrl = (token) => `${origin()}/join/${token}`
 
 async function loadTunnel() {
-  const t = await call('GET', '/api/tunnel')
+  const t = await call('GET', 'api/tunnel')
   publicUrl = t.url
   const el = document.getElementById('tunnel')
   const statusColor = t.status === 'running' ? 'var(--good)' : t.status.startsWith('error') ? 'var(--critical)' : 'var(--muted)'
@@ -96,7 +101,7 @@ async function loadTunnel() {
         <div class="name">Status: <span style="color:${statusColor}">${esc(t.status)}</span></div>
         ${t.url
           ? `<div class="meta">Public URL: <code>${esc(t.url)}</code> <button onclick="copyText('${esc(t.url)}')">copy</button></div>`
-          : `<div class="meta">No public URL — copied lobby links fall back to local addresses.</div>`}
+          : `<div class="meta">No public URL — copied lobby links fall back to local addresses. (On cloud hosts the platform provides the public URL; the tunnel is unnecessary.)</div>`}
         <div class="meta">binary: <code>${esc(t.binary)}</code>${t.startedAt ? ' · started ' + new Date(t.startedAt).toLocaleString() : ''}</div>
         <div class="meta"><label><input type="checkbox" ${t.autoTunnel ? 'checked' : ''} onchange="autoTunnel(this.checked)"> auto-start tunnel when the server boots</label></div>
       </div>
@@ -123,7 +128,7 @@ async function loadTunnel() {
 
 async function saveTunnelConfig() {
   const mode = document.querySelector('input[name="tmode"]:checked').value
-  await call('POST', '/api/tunnel/config', {
+  await call('POST', 'api/tunnel/config', {
     mode,
     name: document.getElementById('tname').value,
     hostname: document.getElementById('thost').value
@@ -133,14 +138,14 @@ async function saveTunnelConfig() {
 }
 
 async function tunnelLogin() {
-  const r = await call('POST', '/api/tunnel/login')
+  const r = await call('POST', 'api/tunnel/login')
   toast(r.message)
   setTimeout(loadTunnel, 8000)
 }
 
 async function tunnelSetup() {
   try {
-    const r = await call('POST', '/api/tunnel/setup')
+    const r = await call('POST', 'api/tunnel/setup')
     document.getElementById('tunnel-setup-out').innerHTML = `<pre>${esc(r.output.join('\n'))}</pre>`
     toast('Tunnel created and DNS routed — start the tunnel')
   } catch (e) {
@@ -150,19 +155,19 @@ async function tunnelSetup() {
 }
 
 async function tunnelCmd(cmd) {
-  await call('POST', '/api/tunnel/' + cmd)
+  await call('POST', 'api/tunnel/' + cmd)
   toast(cmd === 'start' ? 'Tunnel starting — URL appears in a few seconds' : 'Tunnel stopped')
   setTimeout(() => { loadTunnel(); loadLobbies() }, 1500)
   setTimeout(() => { loadTunnel(); loadLobbies() }, 6000)
 }
 
 async function autoTunnel(enabled) {
-  await call('POST', '/api/tunnel/autostart', { enabled })
+  await call('POST', 'api/tunnel/autostart', { enabled })
   toast(enabled ? 'Tunnel will auto-start with the server' : 'Auto-start disabled')
 }
 
 async function loadLobbies() {
-  const data = await call('GET', '/api/overview')
+  const data = await call('GET', 'api/overview')
   mainPort = data.mainPort
   const el = document.getElementById('lobbies')
   if (!data.lobbies.length) { el.innerHTML = '<p class="empty">No lobbies.</p>'; return }
@@ -203,7 +208,7 @@ async function loadLobbies() {
 }
 
 async function loadBugs() {
-  const bugs = await call('GET', '/api/bugs')
+  const bugs = await call('GET', 'api/bugs')
   const el = document.getElementById('bugs')
   if (!bugs.length) { el.innerHTML = '<p class="empty">No bug reports.</p>'; return }
   el.innerHTML = bugs.map((b) => `
@@ -226,21 +231,21 @@ function copyText(text) {
 
 async function deleteLobby(id, name) {
   if (!confirm(`Delete lobby "${name}" with ALL its runners, attempts, saves and ROM? This cannot be undone.`)) return
-  await call('DELETE', '/api/lobbies/' + id)
+  await call('DELETE', 'api/lobbies/' + id)
   toast('Lobby deleted')
   loadLobbies()
 }
 
 async function deleteMember(id, name) {
   if (!confirm(`Remove runner "${name}" and all their attempts/saves? This cannot be undone.`)) return
-  await call('DELETE', '/api/members/' + id)
+  await call('DELETE', 'api/members/' + id)
   toast('Runner removed')
   loadLobbies()
 }
 
 async function regen(id, name) {
   if (!confirm(`Generate a new secret link for "${name}"? Their old link stops working.`)) return
-  const r = await call('POST', `/api/members/${id}/regenerate`)
+  const r = await call('POST', `api/members/${id}/regenerate`)
   await navigator.clipboard.writeText(memberUrl(r.memberToken))
   toast(`New link for ${name} copied to clipboard`)
   loadLobbies()
@@ -249,7 +254,7 @@ async function regen(id, name) {
 async function toggleBug(file) {
   const pre = document.getElementById('bug-' + file)
   if (pre.style.display === 'none') {
-    const report = await call('GET', '/api/bugs/' + file)
+    const report = await call('GET', 'api/bugs/' + file)
     pre.textContent = JSON.stringify(report, null, 2)
     pre.style.display = 'block'
   } else {
@@ -259,7 +264,7 @@ async function toggleBug(file) {
 
 async function deleteBug(file) {
   if (!confirm('Delete this bug report?')) return
-  await call('DELETE', '/api/bugs/' + file)
+  await call('DELETE', 'api/bugs/' + file)
   toast('Report deleted')
   loadBugs()
 }

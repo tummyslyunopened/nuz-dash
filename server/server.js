@@ -744,7 +744,7 @@ if (fs.existsSync(emulatorDataDir)) {
 const distDir = path.join(__dirname, '..', 'dist')
 if (fs.existsSync(distDir)) {
   app.use(express.static(distDir))
-  app.get(/^\/(?!api|uploads|emulatorjs).*/, (req, res) => res.sendFile(path.join(distDir, 'index.html')))
+  app.get(/^\/(?!api|uploads|emulatorjs|admin).*/, (req, res) => res.sendFile(path.join(distDir, 'index.html')))
 }
 
 app.listen(PORT, () => {
@@ -956,3 +956,25 @@ adminApp.get('/', (req, res) => res.sendFile(path.join(__dirname, 'admin.html'))
 adminApp.listen(ADMIN_PORT, '127.0.0.1', () => {
   console.log(`admin dashboard (localhost only) at http://localhost:${ADMIN_PORT}`)
 })
+
+// Cloud mode (single exposed port, e.g. Railway): setting ADMIN_TOKEN also
+// mounts the admin app on the MAIN server at /admin behind HTTP basic auth
+// (user "admin", password = the token). Unset locally, nothing changes.
+if (process.env.ADMIN_TOKEN) {
+  const adminAuth = (req, res, next) => {
+    const hdr = req.headers.authorization || ''
+    const ok = hdr.startsWith('Basic ') &&
+      Buffer.from(hdr.slice(6), 'base64').toString() === `admin:${process.env.ADMIN_TOKEN}`
+    if (!ok) {
+      res.set('WWW-Authenticate', 'Basic realm="nuz-dash admin"')
+      return res.status(401).end()
+    }
+    next()
+  }
+  app.use('/admin', adminAuth, (req, res, next) => {
+    // exact /admin (no slash) must redirect so the page's relative fetches resolve under /admin/
+    if (req.originalUrl === '/admin') return res.redirect('/admin/')
+    next()
+  }, adminApp)
+  console.log('admin dashboard also mounted at /admin (basic auth, ADMIN_TOKEN)')
+}

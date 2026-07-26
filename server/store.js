@@ -3,7 +3,11 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-export const dataDir = path.join(__dirname, 'data')
+// NUZ_DATA_DIR relocates all persistent data (cloud volumes, installers);
+// defaults to server/data for local development.
+export const dataDir = process.env.NUZ_DATA_DIR
+  ? path.resolve(process.env.NUZ_DATA_DIR)
+  : path.join(__dirname, 'data')
 export const uploadsDir = path.join(dataDir, 'uploads')
 
 fs.mkdirSync(uploadsDir, { recursive: true })

@@ -1,0 +1,13 @@
+node_modules
+dist
+server/data
+site
+tools
+tests
+scripts
+.git
+.githooks
+.claude
+CLAUDE.md
+CLAUDE.local.md
+README.md

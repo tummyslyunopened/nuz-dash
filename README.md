@@ -99,6 +99,22 @@ Both require wrangler on PATH and a one-time `wrangler login`. On Windows
 ARM64, install it as `npm i -g wrangler@2 --ignore-scripts` (newer wrangler
 crashes there — its workerd runtime has no ARM64-Windows build).
 
+## Cloud hosting (Railway / Docker)
+
+The repo ships a `Dockerfile` and `railway.json` for one-click-style cloud
+deploys. Environment variables:
+
+- `NUZ_DATA_DIR` — where all persistent data lives (default `server/data`;
+  set it to a mounted volume in the cloud, e.g. `/data`).
+- `PORT` — main app port (cloud platforms set this automatically).
+- `ADMIN_TOKEN` — when set, the admin dashboard is ALSO mounted on the main
+  app at `/admin` behind HTTP basic auth (user `admin`, password = the token).
+  Needed on platforms that expose a single port; leave unset locally.
+
+On a cloud host the platform provides the public URL — the Cloudflare tunnel
+is unnecessary (ignore the tunnel panel). Railway deploys need a volume
+mounted at `/data` and `ADMIN_TOKEN` set.
+
 ## Data
 
 Everything lives in `server/data/` as JSON files (plus uploaded map images) — back up
