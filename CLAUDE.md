@@ -147,6 +147,8 @@ node tools/serve-site.mjs   # local site preview on 8790
   well (create lobby → member token → exercise endpoints → delete). WASM/
   emulator behavior can't be tested headless — ask the user to check and report
   the radar Diagnostics text or a bug report (admin dashboard shows them).
+  TESTING.md is the honest ledger of verified vs untested surface — update it
+  when coverage genuinely changes (both directions).
 
 ## Conventions & cautions
 

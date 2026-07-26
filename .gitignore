@@ -5,7 +5,8 @@ dist/
 # images, battery saves, save states, sprite cache, PokeAPI cache, heap dumps
 server/data/
 
-.claude/settings.local.json
+# Agent/dev-machine config — stays local, never published
+.claude/
 tools/
 CLAUDE.local.md
 

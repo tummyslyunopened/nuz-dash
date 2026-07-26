@@ -10,9 +10,11 @@ const preview = process.argv.includes('--preview')
 const args = ['pages', 'publish', 'site', '--project-name', 'nuzdash', '--commit-dirty=true']
 if (preview) args.push('--branch', 'preview')
 
+// CLOUDFLARE_ACCOUNT_ID env var is used if set; otherwise wrangler infers
+// the account from its login (fine for single-account setups).
 const res = spawnSync(process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler', args, {
   stdio: 'inherit',
-  env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID || 'b1c66c197dba7d75232fd69f3632a2e1' },
+  env: process.env,
   shell: process.platform === 'win32'
 })
 process.exit(res.status ?? 1)

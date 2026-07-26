@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell($app = Invoke-WebRequest http://localhost:4517/ -UseBasicParsing; Write-Output \"app: $\\($app.StatusCode\\)\")",
-      "PowerShell($env:Path = [Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [Environment]::GetEnvironmentVariable\\('Path','User'\\); npm run build 2>&1 | Select-Object -Last 1)",
-      "PowerShell($env:Path = [Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [Environment]::GetEnvironmentVariable\\('Path','User'\\); node server/server.js)"
-    ]
-  }
-}

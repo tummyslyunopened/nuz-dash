@@ -128,6 +128,12 @@ Everything lives in `server/data/` as JSON files (plus uploaded map images) — 
 that folder to keep your runs. PokeAPI responses are cached there too, so after a
 location/species has been fetched once the app works offline for it.
 
+## Testing
+
+`npm test` runs the save-parser and radar unit suites. For what's actually
+verified beyond that — API smoke coverage, play-tested surface, and known
+gaps (notably iOS) — see [TESTING.md](TESTING.md).
+
 ## Legal
 
 - **License:** Nuz-Dash is free software under the **GPLv3** (see [LICENSE](LICENSE)).
