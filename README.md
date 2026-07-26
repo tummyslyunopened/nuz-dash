@@ -1,5 +1,7 @@
 # Nuz-Dash
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/5oXtmS?referralCode=rQ5Jyn&utm_medium=integration&utm_source=template&utm_campaign=generic)
+
 A multiplayer Pokemon Nuzlocke run platform. Create a lobby, invite friends with a
 link, and race runs side by side — emulator, tracker, and watch party in one screen.
 No accounts: personal secret links are the only auth.
