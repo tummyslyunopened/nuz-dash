@@ -89,6 +89,7 @@ async function loadTunnel() {
   publicUrl = t.url
   const el = document.getElementById('tunnel')
   const statusColor = t.status === 'running' ? 'var(--good)' : t.status.startsWith('error') ? 'var(--critical)' : 'var(--muted)'
+  const named = t.mode === 'named'
   el.innerHTML = `
     <div class="row">
       <div class="grow">
@@ -103,7 +104,49 @@ async function loadTunnel() {
         ? `<button class="danger" onclick="tunnelCmd('stop')">Stop tunnel</button>`
         : `<button class="primary" onclick="tunnelCmd('start')">Start tunnel</button>`}
     </div>
+    <div class="meta" style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px">
+      <b>Mode:</b>
+      <label><input type="radio" name="tmode" value="quick" ${!named ? 'checked' : ''}> quick (random trycloudflare.com URL)</label>
+      <label><input type="radio" name="tmode" value="named" ${named ? 'checked' : ''}> named (your Cloudflare domain)</label>
+    </div>
+    <div class="meta" style="margin-top:6px">
+      tunnel name <input id="tname" value="${esc(t.name)}" style="width:130px; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:3px 8px">
+      hostname <input id="thost" value="${esc(t.hostname)}" placeholder="app.example.com" style="width:190px; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:3px 8px">
+      <button onclick="saveTunnelConfig()">Save config</button>
+      ${named && !t.hasCert ? `<button class="primary" onclick="tunnelLogin()">1. Login to Cloudflare</button>` : ''}
+      ${named && t.hasCert ? `<button class="primary" onclick="tunnelSetup()">Create tunnel &amp; route DNS</button>` : ''}
+      ${named ? `<span>cert: ${t.hasCert ? '✓' : '✗ (login required)'}</span>` : ''}
+    </div>
+    <div class="meta" id="tunnel-setup-out"></div>
     ${t.log.length ? `<pre style="margin-top:10px; max-height:140px">${esc(t.log.join('\n'))}</pre>` : ''}`
+}
+
+async function saveTunnelConfig() {
+  const mode = document.querySelector('input[name="tmode"]:checked').value
+  await call('POST', '/api/tunnel/config', {
+    mode,
+    name: document.getElementById('tname').value,
+    hostname: document.getElementById('thost').value
+  })
+  toast('Tunnel config saved — restart the tunnel to apply')
+  loadTunnel()
+}
+
+async function tunnelLogin() {
+  const r = await call('POST', '/api/tunnel/login')
+  toast(r.message)
+  setTimeout(loadTunnel, 8000)
+}
+
+async function tunnelSetup() {
+  try {
+    const r = await call('POST', '/api/tunnel/setup')
+    document.getElementById('tunnel-setup-out').innerHTML = `<pre>${esc(r.output.join('\n'))}</pre>`
+    toast('Tunnel created and DNS routed — start the tunnel')
+  } catch (e) {
+    toast('Setup failed: ' + e.message)
+  }
+  loadTunnel()
 }
 
 async function tunnelCmd(cmd) {

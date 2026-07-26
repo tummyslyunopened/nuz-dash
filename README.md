@@ -64,19 +64,27 @@ Tunnel in front of it:
 cloudflared tunnel --url http://localhost:4517     # quick tunnel, random *.trycloudflare.com URL
 ```
 
-The printed URL is your public instance — share invite links based on it. Quick
-tunnels get a new URL each start; for a stable hostname, create a named tunnel on a
-Cloudflare-managed domain (`cloudflared tunnel create nuz-dash`, route a DNS record,
-then `cloudflared tunnel run`). Remember: secret links are the only auth, so share
-them like passwords.
+Tunnels are managed from the admin dashboard (`http://localhost:4518`), which
+supports two modes:
+
+- **quick** — zero config, random `*.trycloudflare.com` URL that changes each start.
+- **named** — a permanent hostname on a domain you manage on Cloudflare. In the
+  admin tunnel panel: switch mode to *named*, set the tunnel name and hostname
+  (e.g. `app.example.com` or the apex), click **Login to Cloudflare** (approve in
+  the browser), then **Create tunnel & route DNS**, then start the tunnel. The
+  server runs `cloudflared tunnel run` for you and every copied invite/member
+  link uses the hostname.
+
+Remember: secret links are the only auth, so share them like passwords.
 
 ## Onboarding site (nuzdash.dev)
 
 `site/` holds the public landing/onboarding page — a single self-contained
-`index.html` with the self-host guide and a download link to the latest GitHub
-release. Deploy it to Cloudflare Pages (project root `site/`, no build command)
-and point the nuzdash.dev domain at it once purchased. The `site/` directory is
-excluded from release source archives via `.gitattributes` (`export-ignore`).
+`index.html` with the self-host guide, linking to the latest public GitHub
+release for downloads. Deploy it to Cloudflare Pages (project root `site/`, no
+build command) and point the nuzdash.dev domain at it once purchased. Preview
+locally with `node tools/serve-site.mjs`. The `site/` directory is excluded
+from release source archives via `.gitattributes` (`export-ignore`).
 
 ## Data
 

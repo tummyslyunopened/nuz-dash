@@ -2,7 +2,8 @@ import express from 'express'
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
-import { spawn } from 'child_process'
+import os from 'os'
+import { spawn, execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import { GAMES } from './games.js'
 import { Store, dataDir, uploadsDir } from './store.js'
@@ -18,6 +19,14 @@ const diary = new Store('diary', { entries: [] })
 const maps = new Store('maps', { maps: {} }) // keyed `${lobbyId}|${gameId}`
 const pokecache = new Store('pokecache', { cache: {} })
 const settings = new Store('settings', { settings: { autoTunnel: false } })
+// Tunnel settings gained fields over time — fill in defaults for older files.
+settings.data.settings = {
+  autoTunnel: false,
+  tunnelMode: 'quick', // quick (random trycloudflare URL) | named (your own Cloudflare domain)
+  tunnelName: 'nuz-dash',
+  tunnelHostname: '',
+  ...settings.data.settings
+}
 
 const romsDir = path.join(dataDir, 'roms')
 const statesDir = path.join(dataDir, 'states')
@@ -91,11 +100,19 @@ function cloudflaredPath() {
   return fs.existsSync(local) ? local : 'cloudflared'
 }
 
+const certPath = path.join(os.homedir(), '.cloudflared', 'cert.pem')
+const hasCert = () => fs.existsSync(certPath)
+
 function startTunnel() {
   if (tunnel.proc) return
+  const cfg = settings.data.settings
+  const named = cfg.tunnelMode === 'named' && cfg.tunnelName && cfg.tunnelHostname
+  const args = named
+    ? ['tunnel', 'run', '--url', `http://localhost:${PORT}`, cfg.tunnelName]
+    : ['tunnel', '--url', `http://localhost:${PORT}`]
   let proc
   try {
-    proc = spawn(cloudflaredPath(), ['tunnel', '--url', `http://localhost:${PORT}`], { windowsHide: true })
+    proc = spawn(cloudflaredPath(), args, { windowsHide: true })
   } catch (err) {
     tunnel.status = `error: ${err.message}`
     return
@@ -111,8 +128,15 @@ function startTunnel() {
       if (!trimmed) continue
       tunnel.log.push(trimmed.slice(0, 300))
       if (tunnel.log.length > 60) tunnel.log.shift()
-      const m = trimmed.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)
-      if (m) { tunnel.url = m[0]; tunnel.status = 'running' }
+      if (named) {
+        if (trimmed.includes('Registered tunnel connection')) {
+          tunnel.url = `https://${cfg.tunnelHostname}`
+          tunnel.status = 'running'
+        }
+      } else {
+        const m = trimmed.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)
+        if (m) { tunnel.url = m[0]; tunnel.status = 'running' }
+      }
     }
   }
   proc.stdout.on('data', onData)
@@ -766,14 +790,66 @@ function deleteLobbyCascade(lobbyId) {
 const saveAll = () => { lobbies.save(); members.save(); runs.save(); encounters.save(); diary.save(); maps.save() }
 
 adminApp.get('/api/tunnel', (req, res) => {
+  const cfg = settings.data.settings
   res.json({
     status: tunnel.status,
     url: tunnel.url,
     startedAt: tunnel.startedAt,
-    autoTunnel: settings.data.settings.autoTunnel,
+    autoTunnel: cfg.autoTunnel,
+    mode: cfg.tunnelMode,
+    name: cfg.tunnelName,
+    hostname: cfg.tunnelHostname,
+    hasCert: hasCert(),
     binary: cloudflaredPath(),
     log: tunnel.log.slice(-12)
   })
+})
+
+adminApp.post('/api/tunnel/config', (req, res) => {
+  const cfg = settings.data.settings
+  if (['quick', 'named'].includes(req.body.mode)) cfg.tunnelMode = req.body.mode
+  if (typeof req.body.name === 'string') cfg.tunnelName = req.body.name.trim() || 'nuz-dash'
+  if (typeof req.body.hostname === 'string') cfg.tunnelHostname = req.body.hostname.trim().replace(/^https?:\/\//, '')
+  settings.save()
+  res.json({ mode: cfg.tunnelMode, name: cfg.tunnelName, hostname: cfg.tunnelHostname })
+})
+
+// Opens the Cloudflare authorization page in the host's browser; the origin
+// cert lands in ~/.cloudflared/cert.pem when the user approves.
+adminApp.post('/api/tunnel/login', (req, res) => {
+  try {
+    const proc = spawn(cloudflaredPath(), ['tunnel', 'login'], { windowsHide: true, detached: true, stdio: 'ignore' })
+    proc.unref()
+    res.json({ ok: true, message: 'A Cloudflare login page should open in a browser on the host — approve it, then refresh.' })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// One-time named-tunnel setup: create the tunnel and route the hostname's DNS.
+adminApp.post('/api/tunnel/setup', (req, res) => {
+  const cfg = settings.data.settings
+  if (!hasCert()) return res.status(400).json({ error: 'Not logged in to Cloudflare yet — use Login first.' })
+  if (!cfg.tunnelName || !cfg.tunnelHostname) return res.status(400).json({ error: 'Set tunnel name and hostname first.' })
+  const output = []
+  const runCmd = (args, tolerate) => {
+    try {
+      output.push(`$ cloudflared ${args.join(' ')}`)
+      output.push(execFileSync(cloudflaredPath(), args, { encoding: 'utf8', stderr: 'pipe' }).trim())
+      return true
+    } catch (err) {
+      const msg = `${err.stdout || ''}${err.stderr || ''}`.trim() || err.message
+      output.push(msg)
+      return tolerate && tolerate.test(msg)
+    }
+  }
+  if (!runCmd(['tunnel', 'create', cfg.tunnelName], /already exists/i)) {
+    return res.status(500).json({ error: 'tunnel create failed', output })
+  }
+  if (!runCmd(['tunnel', 'route', 'dns', cfg.tunnelName, cfg.tunnelHostname], /already exists|already configured/i)) {
+    return res.status(500).json({ error: 'DNS routing failed', output })
+  }
+  res.json({ ok: true, output })
 })
 
 adminApp.post('/api/tunnel/start', (req, res) => {

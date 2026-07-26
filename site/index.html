@@ -91,7 +91,7 @@
       No accounts. Invite links are all it takes.
     </p>
     <div class="cta">
-      <a class="btn" href="downloads/nuz-dash-latest.zip" download>⬇ Download Nuz-Dash v2.1.0</a>
+      <a class="btn" href="https://github.com/tummyslyunopened/nuz-dash/releases/latest">⬇ Download the latest release</a>
       <a class="btn ghost" href="#selfhost">Self-host guide</a>
     </div>
   </section>
@@ -116,7 +116,7 @@
     </div>
     <div class="step">
       <h3>Download &amp; build</h3>
-      <p><a href="downloads/nuz-dash-latest.zip" download>Download the latest release</a> and extract it anywhere, then in that folder:</p>
+      <p>Grab the source zip from the <a href="https://github.com/tummyslyunopened/nuz-dash/releases/latest">latest GitHub release</a> and extract it anywhere (or <code>git clone https://github.com/tummyslyunopened/nuz-dash</code>), then in that folder:</p>
       <pre>npm install
 npm run build
 npm start</pre>
@@ -124,8 +124,10 @@ npm start</pre>
     </div>
     <div class="step">
       <h3>Go public with a Cloudflare Tunnel</h3>
-      <p>To let friends join over the internet, install <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/">cloudflared</a> (drop the binary into a <code>tools/</code> folder next to the app, or put it on your PATH). Then open the admin dashboard at <code>http://localhost:4518</code> and hit <b>Start tunnel</b> — or enable auto-start so it comes up with the server.</p>
-      <p>Every invite link you copy automatically uses the public tunnel address.</p>
+      <p>To let friends join over the internet, install <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/">cloudflared</a> (drop the binary into a <code>tools/</code> folder next to the app, or put it on your PATH). Then open the admin dashboard at <code>http://localhost:4518</code> — the tunnel panel offers two modes:</p>
+      <p><b>Quick</b> — hit <b>Start tunnel</b> and you're public in seconds on a random <code>*.trycloudflare.com</code> URL. Zero setup, but the URL changes every time the tunnel restarts.</p>
+      <p><b>Named (recommended)</b> — a permanent address on a domain you manage on <a href="https://www.cloudflare.com">Cloudflare</a>. In the tunnel panel: switch to <em>named</em>, enter a tunnel name and your hostname (apex or subdomain, e.g. <code>nuz.example.com</code>), click <b>Login to Cloudflare</b> and approve in the browser, then <b>Create tunnel &amp; route DNS</b>, then <b>Start tunnel</b>. Enable auto-start and your address survives every restart.</p>
+      <p>Either way, every invite link you copy automatically uses the public address.</p>
     </div>
     <div class="step">
       <h3>Invite your runners</h3>
@@ -152,8 +154,12 @@ npm start</pre>
       <p>The emulator covers Game Boy, Game Boy Color, Game Boy Advance, and Nintendo DS. Deep integration — encounter radar, live party, auto backups — currently supports Gen 3 (Ruby/Sapphire/Emerald/FireRed/LeafGreen) and hacks built on them, including pokeemerald-expansion-based hacks. The manual tracker supports all 21 mainline games.</p>
     </details>
     <details>
+      <summary>Can I use my own domain?</summary>
+      <p>Yes — if your domain is on Cloudflare (any plan, including just DNS), the admin dashboard sets up a <em>named tunnel</em> for you: log in once, click "Create tunnel &amp; route DNS", and your instance gets a permanent hostname like <code>nuz.example.com</code>. No port forwarding, no exposed IP, free. If the hostname already has a DNS record, remove it first — the setup won't overwrite existing records.</p>
+    </details>
+    <details>
       <summary>How do I update?</summary>
-      <p>Download the newest release over your install (or <code>git pull</code>), then <code>npm install &amp;&amp; npm run build</code> and restart. Your <code>server/data/</code> folder is untouched, and data migrations run automatically on boot.</p>
+      <p>Download the <a href="https://github.com/tummyslyunopened/nuz-dash/releases/latest">newest release</a> over your install (or <code>git pull</code>), then <code>npm install &amp;&amp; npm run build</code> and restart. Your <code>server/data/</code> folder is untouched, and data migrations run automatically on boot.</p>
     </details>
   </div>
 
