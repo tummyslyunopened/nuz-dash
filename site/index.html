@@ -160,6 +160,14 @@ npm start</pre>
       <p>The emulator covers Game Boy, Game Boy Color, Game Boy Advance, and Nintendo DS. Deep integration — encounter radar, live party, auto backups — currently supports Gen 3 (Ruby/Sapphire/Emerald/FireRed/LeafGreen) and hacks built on them, including pokeemerald-expansion-based hacks. The manual tracker supports all 21 mainline games.</p>
     </details>
     <details>
+      <summary>I deployed on Railway — where's my URL?</summary>
+      <p>If your instance doesn't show a URL automatically: open your Railway project, click the service, go to <b>Settings → Networking</b>, and hit <b>Generate Domain</b> (accept the suggested port). That's your instance — open it and create your lobby. You only ever do this once.</p>
+    </details>
+    <details>
+      <summary>How big a server does it need? What does it cost?</summary>
+      <p>Tiny — the emulator runs in each player's browser, so the server just relays saves, tracker data, and low-fps stream frames. Railway scales resources automatically and bills actual usage; a hobby lobby typically lands around $5/month. Optionally cap costs under <b>Settings → Deploy → Replica Limits</b>. One rule: <b>keep replicas at 1</b> — Nuz-Dash is single-instance by design (one volume, one save authority), and multiple replicas will corrupt lobby state.</p>
+    </details>
+    <details>
       <summary>Can I use my own domain?</summary>
       <p>Yes — if your domain is on Cloudflare (any plan, including just DNS), the admin dashboard sets up a <em>named tunnel</em> for you: log in once, click "Create tunnel &amp; route DNS", and your instance gets a permanent hostname like <code>nuz.example.com</code>. No port forwarding, no exposed IP, free. If the hostname already has a DNS record, remove it first — the setup won't overwrite existing records.</p>
     </details>
