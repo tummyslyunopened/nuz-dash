@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# User data: runs, diary, uploaded ROMs (copyrighted — never commit), map
+# images, battery saves, save states, sprite cache, PokeAPI cache, heap dumps
+server/data/
+
+.claude/settings.local.json
+
+*.log
