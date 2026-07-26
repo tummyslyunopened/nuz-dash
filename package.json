@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "concurrently -k -n server,client \"node server/server.js\" \"vite\"",
     "build": "vite build",
-    "start": "node server/server.js"
+    "start": "node server/server.js",
+    "site:deploy": "node scripts/deploy-site.mjs",
+    "site:preview": "node scripts/deploy-site.mjs --preview"
   },
   "dependencies": {
     "express": "^4.19.2",

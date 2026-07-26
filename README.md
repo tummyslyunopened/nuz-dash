@@ -81,10 +81,23 @@ Remember: secret links are the only auth, so share them like passwords.
 
 `site/` holds the public landing/onboarding page — a single self-contained
 `index.html` with the self-host guide, linking to the latest public GitHub
-release for downloads. Deploy it to Cloudflare Pages (project root `site/`, no
-build command) and point the nuzdash.dev domain at it once purchased. Preview
-locally with `node tools/serve-site.mjs`. The `site/` directory is excluded
-from release source archives via `.gitattributes` (`export-ignore`).
+release for downloads. It is hosted on Cloudflare Pages (project `nuzdash`,
+domain nuzdash.dev) and excluded from release source archives via
+`.gitattributes` (`export-ignore`).
+
+Deployment is automatic: a `pre-push` git hook (in `.githooks/`, activated
+with `git config core.hooksPath .githooks`) publishes the site whenever a push
+contains commits touching `site/`. Deploy failures never block a push. Manual
+controls:
+
+```
+npm run site:preview   # deploy to the preview channel (safe, separate URL)
+npm run site:deploy    # deploy to production (nuzdash.dev)
+```
+
+Both require wrangler on PATH and a one-time `wrangler login`. On Windows
+ARM64, install it as `npm i -g wrangler@2 --ignore-scripts` (newer wrangler
+crashes there — its workerd runtime has no ARM64-Windows build).
 
 ## Data
 
