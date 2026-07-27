@@ -60,8 +60,17 @@ export default function EmulatorPanel({ run, setRun }) {
   const [stateMsg, setStateMsg] = useState('')
   const [streaming, setStreaming] = useState(true)
   const [mobileFs, setMobileFs] = useState(false)
+  // Replacing the ROM swaps the SHARED lobby game — ROM managers only
+  const [canManageRom, setCanManageRom] = useState(false)
   const fileRef = useRef(null)
   const mountWrapRef = useRef(null)
+
+  useEffect(() => {
+    fetch('/api/me', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d) => setCanManageRom(!!d.member?.romManager))
+      .catch(() => {})
+  }, [])
 
   // Mobile fullscreen: CSS takeover everywhere (iPhone has no element
   // fullscreen API), plus native fullscreen + landscape lock where supported.
@@ -126,13 +135,34 @@ export default function EmulatorPanel({ run, setRun }) {
     return () => clearInterval(t)
   }, [started])
 
-  // Auto-resume: restore the battery save FIRST (savestates don't reliably
-  // include SRAM — without this the party scanner starves until the first
-  // in-game save), then load the server auto state.
-  const restoreBatterySave = async (gm) => {
-    const savRes = await fetch(`/api/runs/${run.id}/sav`, { headers: authHeaders() })
-    if (!savRes.ok) return false
-    const bytes = new Uint8Array(await savRes.arrayBuffer())
+  // ---- Launch source: latest server save (default), any historical battery
+  // save from the archive, or a fresh boot. Battery saves ONLY — states stay
+  // manual (emulator menu); the sav is the source of truth.
+  const [savOptions, setSavOptions] = useState([])
+  const [selectedSave, setSelectedSave] = useState('latest')
+  const [showLoader, setShowLoader] = useState(false)
+  const [loaderChoice, setLoaderChoice] = useState('latest')
+
+  const loadSavHistory = async () => {
+    try {
+      const h = await fetch('/api/me/save-history', { headers: authHeaders() }).then((r) => r.json())
+      setSavOptions((h.files || []).filter((f) => f.runId === run.id && f.type === 'sav'))
+    } catch { /* picker just shows Latest */ }
+  }
+  useEffect(() => { if (run.rom) loadSavHistory() }, [run.id, run.rom?.name]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fmtWhen = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+  const fetchSavBytes = async (choice) => {
+    const url = choice === 'latest'
+      ? `/api/runs/${run.id}/sav`
+      : `/api/me/save-history/${encodeURIComponent(choice)}`
+    const res = await fetch(url, { headers: authHeaders() })
+    if (!res.ok) return null
+    return new Uint8Array(await res.arrayBuffer())
+  }
+
+  const writeSavToFs = (gm, bytes) => {
     const p = gm.getSaveFilePath()
     const parts = p.split('/')
     let cur = ''
@@ -145,19 +175,43 @@ export default function EmulatorPanel({ run, setRun }) {
     gm.FS.writeFile(p, bytes)
     if (typeof gm.loadSaveFiles === 'function') gm.loadSaveFiles()
     window.dispatchEvent(new Event('nuz:sav-restored')) // party panel syncs immediately
-    return true
   }
 
-  // Resume policy: battery save ONLY. States are convenience artifacts
-  // (history/manual); the sav is the source of truth and boots like real
-  // hardware — title screen, Continue at the last in-game save.
   const autoResume = async () => {
     try {
       const gm = window.EJS_emulator?.gameManager
       if (!gm) return
-      const restored = await restoreBatterySave(gm)
-      if (restored) setStateMsg('Battery save restored from the server — hit Continue on the title screen to resume.')
-    } catch { /* fresh boot is fine */ }
+      if (selectedSave === 'fresh') { setStateMsg('Fresh boot — no save restored.'); return }
+      const bytes = await fetchSavBytes(selectedSave)
+      if (!bytes) {
+        setStateMsg('No server save available — booted fresh. If one should exist, use "Load a save" below.')
+        return
+      }
+      writeSavToFs(gm, bytes)
+      const label = selectedSave === 'latest'
+        ? 'Latest battery save'
+        : `Battery save from ${fmtWhen(savOptions.find((f) => f.file === selectedSave)?.savedAt || '')}`
+      setStateMsg(`${label} restored — hit Continue on the title screen to resume.`)
+    } catch (err) {
+      setStateMsg(`Save restore failed (${err.message}) — use "Load a save" below.`)
+    }
+  }
+
+  // Post-start recovery: apply any battery save and restart the emulator to
+  // the title screen — fixes "my save didn't load" without a page reload.
+  const applySave = async () => {
+    try {
+      const gm = window.EJS_emulator?.gameManager
+      if (!gm) throw new Error('game is not running')
+      const bytes = await fetchSavBytes(loaderChoice)
+      if (!bytes) throw new Error('save not found on the server')
+      writeSavToFs(gm, bytes)
+      gm.restart()
+      setShowLoader(false)
+      setStateMsg('Save applied and game restarted — hit Continue on the title screen.')
+    } catch (err) {
+      setStateMsg(`Load failed: ${err.message}`)
+    }
   }
 
   // ---- Single-session guard: only one live tab/device syncs a run ----
@@ -379,7 +433,9 @@ export default function EmulatorPanel({ run, setRun }) {
             <span className="chip rom-chip" title={`${run.rom.name} · ${fmtSize(run.rom.size)} · ${run.rom.core.toUpperCase()}`}>
               {run.rom.name} · {fmtSize(run.rom.size)} · {run.rom.core.toUpperCase()}
             </span>
-            <button className="small" onClick={() => fileRef.current?.click()} disabled={busy || started}>Replace</button>
+            {canManageRom && (
+              <button className="small" onClick={() => fileRef.current?.click()} disabled={busy || started}>Replace</button>
+            )}
             <button className="small danger" onClick={removeRom} disabled={busy}>Remove</button>
           </span>
         )}
@@ -393,18 +449,33 @@ export default function EmulatorPanel({ run, setRun }) {
       />
       {!run.rom ? (
         <div className="map-upload">
-          <p>No ROM linked to this attempt. Pick one from the lobby's ROM library when starting an attempt, or upload one here (it's added to the lobby library).</p>
-          <p>Legally-dumped ROMs only — patched ROM hacks welcome (.gb / .gbc / .gba / .nds, unzipped).</p>
-          <button className="primary" onClick={() => fileRef.current?.click()} disabled={busy}>
-            <Upload size={14} /> {busy ? 'Uploading…' : 'Upload ROM'}
-          </button>
+          <p>No ROM linked to this attempt. Pick one from the lobby's ROM library when starting an attempt{canManageRom ? ", or upload one here (it's added to the lobby library)" : ''}.</p>
+          {canManageRom ? (
+            <>
+              <p>Legally-dumped ROMs only — patched ROM hacks welcome (.gb / .gbc / .gba / .nds, unzipped).</p>
+              <button className="primary" onClick={() => fileRef.current?.click()} disabled={busy}>
+                <Upload size={14} /> {busy ? 'Uploading…' : 'Upload ROM'}
+              </button>
+            </>
+          ) : (
+            <p>Uploading a new lobby ROM is limited to ROM managers (the lobby creator, by default).</p>
+          )}
         </div>
       ) : (
         <>
           {!started && (
             <div className="map-upload">
               <p>{run.rom.name} is ready.</p>
-              <button className="primary" onClick={start}><Play size={14} /> Start game</button>
+              <div className="launch-row">
+                <select value={selectedSave} onChange={(e) => setSelectedSave(e.target.value)} title="Which save to boot from">
+                  <option value="latest">Resume latest save{run.sav?.savedAt ? ` (${fmtWhen(run.sav.savedAt)})` : ''}</option>
+                  {savOptions.map((f) => (
+                    <option key={f.file} value={f.file}>Save from {fmtWhen(f.savedAt)}</option>
+                  ))}
+                  <option value="fresh">Fresh boot (no save)</option>
+                </select>
+                <button className="primary" onClick={start}><Play size={14} /> Start</button>
+              </div>
             </div>
           )}
           <div ref={mountWrapRef} id="ejs-wrap" className={`ejs-wrap ${mobileFs ? 'mobile-fs' : ''}`}>
@@ -424,10 +495,31 @@ export default function EmulatorPanel({ run, setRun }) {
           </div>
           {stateMsg && <p className="map-tip">{stateMsg}</p>}
           {started && (
-            <p className="map-tip">
-              Progress resumes automatically: every in-game save updates the server auto-save, which loads on your
-              next launch. Manual save states live in the emulator's own menu.
-            </p>
+            <>
+              <div className="launch-row" style={{ justifyContent: 'flex-start', marginTop: 6 }}>
+                {!showLoader ? (
+                  <button className="small" onClick={() => { loadSavHistory(); setShowLoader(true) }}>
+                    Load a save…
+                  </button>
+                ) : (
+                  <>
+                    <select value={loaderChoice} onChange={(e) => setLoaderChoice(e.target.value)}>
+                      <option value="latest">Latest save{run.sav?.savedAt ? ` (${fmtWhen(run.sav.savedAt)})` : ''}</option>
+                      {savOptions.map((f) => (
+                        <option key={f.file} value={f.file}>Save from {fmtWhen(f.savedAt)}</option>
+                      ))}
+                    </select>
+                    <button className="small primary" onClick={applySave}>Apply &amp; restart game</button>
+                    <button className="small" onClick={() => setShowLoader(false)}>Cancel</button>
+                  </>
+                )}
+              </div>
+              <p className="map-tip">
+                Progress resumes automatically: every in-game save updates the server auto-save, which loads on your
+                next launch. "Load a save" restarts the game to the title screen with the chosen save — picking an
+                older one rolls your run back (the newer save stays in Backup history).
+              </p>
+            </>
           )}
         </>
       )}

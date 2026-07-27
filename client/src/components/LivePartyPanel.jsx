@@ -78,7 +78,7 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
     setGame(parsed.game)
     setSource(src)
     setError('')
-    onParty?.(parsed.party)
+    onParty?.(parsed.party, parsed.trainerId)
   }
 
   const downloadBlob = (bytes, filename) => {

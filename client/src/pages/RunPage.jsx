@@ -13,7 +13,7 @@ import WatchPartyPanel from '../components/WatchPartyPanel.jsx'
 import QrLaunchButton from '../components/QrLaunchButton.jsx'
 
 export default function RunPage() {
-  const { token, id } = useParams()
+  const { sid, id } = useParams()
   const [run, setRun] = useState(null)
   const [encounters, setEncounters] = useState([])
   const [locations, setLocations] = useState([])
@@ -22,6 +22,7 @@ export default function RunPage() {
   const [view, setView] = useState('play') // play (default) | dash
   const [prefill, setPrefill] = useState(null)
   const [lastParty, setLastParty] = useState([])
+  const [trainerId, setTrainerId] = useState(null)
 
   useEffect(() => {
     api.get(`/api/runs/${id}`).then((r) => {
@@ -36,7 +37,7 @@ export default function RunPage() {
     return (
       <div className="app-shell">
         <p className="error-note">{error}</p>
-        <Link to={`/m/${token}`} style={{ color: 'var(--accent)' }}>← Back to lobby</Link>
+        <Link to={`/s/${sid}`} style={{ color: 'var(--accent)' }}>← Back to lobby</Link>
       </div>
     )
   }
@@ -95,14 +96,14 @@ export default function RunPage() {
             {run.status === 'archived' && <span className="chip" style={{ marginLeft: 8, verticalAlign: 'middle' }}>ARCHIVED</span>}
           </h1>
           <div className="sub">
-            <Link to={`/m/${token}`} style={{ color: 'var(--muted)' }}>← lobby</Link> · {run.gameName} · started {new Date(run.createdAt).toLocaleDateString()}
+            <Link to={`/s/${sid}`} style={{ color: 'var(--muted)' }}>← lobby</Link> · {run.gameName} · started {new Date(run.createdAt).toLocaleDateString()}
           </div>
         </div>
         <div className="view-toggle">
           <button className={view === 'dash' ? 'active' : ''} onClick={() => setView('dash')}><LayoutDashboard size={13} /> Dashboard</button>
           <button className={view === 'play' ? 'active' : ''} onClick={() => setView('play')}><Gamepad2 size={13} /> Play</button>
         </div>
-        <QrLaunchButton token={token} runId={run.id} />
+        <QrLaunchButton runId={run.id} />
         <div className="stat-tiles">
           <div className="stat-tile">
             <div className="value">
@@ -170,6 +171,7 @@ export default function RunPage() {
               run={run}
               encounters={encounters}
               party={lastParty}
+              trainerId={trainerId}
               onLogged={(enc) => setEncounters((es) => [...es, enc])}
             />
             <LivePartyPanel
@@ -177,7 +179,7 @@ export default function RunPage() {
               encounters={encounters}
               onMarkDead={markEncounterDead}
               onImport={importFromGame}
-              onParty={setLastParty}
+              onParty={(party, tid) => { setLastParty(party); if (tid != null) setTrainerId(tid) }}
               onAutoCaught={autoCaught}
             />
           </div>

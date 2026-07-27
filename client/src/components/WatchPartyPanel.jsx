@@ -6,7 +6,7 @@ import StreamView from './StreamView.jsx'
 
 // Live tiles of everyone else's games, for watching mid-run.
 export default function WatchPartyPanel() {
-  const { token } = useParams()
+  const { sid } = useParams()
   const [myId, setMyId] = useState(null)
   const [summary, setSummary] = useState([])
 
@@ -35,7 +35,7 @@ export default function WatchPartyPanel() {
       ) : (
         <div className="watch-grid">
           {live.map((s) => (
-            <Link key={s.member.id} to={`/m/${token}/view/${s.member.id}`} className="watch-tile" title={`Watch ${s.member.name}`}>
+            <Link key={s.member.id} to={`/s/${sid}/view/${s.member.id}`} className="watch-tile" title={`Watch ${s.member.name}`}>
               <StreamView memberId={s.member.id} interval={1000} />
               <div className="wt-label">
                 <strong>{s.member.name}</strong>

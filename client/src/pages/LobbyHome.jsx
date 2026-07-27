@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, Trophy, Gamepad2, Users, History, Download, RefreshCw, HelpCircle } from 'lucide-react'
-import { api, authHeaders, rememberLink, forgetLink } from '../api.js'
+import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, Trophy, Gamepad2, Users, History, Download, RefreshCw, HelpCircle, ShieldCheck, ShieldOff, Crown } from 'lucide-react'
+import { api, authHeaders, rememberLink, forgetLink, memberToken, pathForToken } from '../api.js'
 import StreamView from '../components/StreamView.jsx'
 import Tour from '../components/Tour.jsx'
 
@@ -13,7 +13,7 @@ const TOUR_STEPS = [
   {
     selector: '[data-tour="secret-link"]',
     title: 'Your secret link IS your account',
-    body: 'No passwords here — this link is how you get back in, on any device. Copy it and bookmark it somewhere safe. If you ever lose it, any lobby-mate can generate you a new one.'
+    body: 'No passwords here — this link is how you get back in, on any device. Copy it and bookmark it somewhere safe. If you ever lose it, a link manager (the lobby creator, or the host) can generate you a new one. While you play, the address bar shows a random session URL instead of the secret — safe to have on stream.'
   },
   {
     selector: '[data-tour="invite-link"]',
@@ -23,7 +23,7 @@ const TOUR_STEPS = [
   {
     selector: '[data-tour="rom"]',
     title: 'One ROM, one race',
-    body: 'The lobby has a single game everyone runs — upload a legally-dumped ROM (patched hacks welcome). Every runner should own their own copy of the game.'
+    body: 'The lobby has a single game everyone runs — the creator (or a deputized ROM manager) uploads a legally-dumped ROM (patched hacks welcome). Every runner should own their own copy of the game.'
   },
   {
     selector: '[data-tour="attempts"]',
@@ -61,7 +61,7 @@ const timeAgo = (iso) => {
 }
 
 export default function LobbyHome() {
-  const { token } = useParams()
+  const { sid } = useParams()
   const [me, setMe] = useState(null)
   const [summary, setSummary] = useState([])
   const [attempts, setAttempts] = useState([])
@@ -82,7 +82,7 @@ export default function LobbyHome() {
   // handoff flag OR simply on being a brand-new member, so it can't be lost.
   useEffect(() => {
     if (!me) return
-    if (localStorage.getItem(`nuz-tour-done:${token}`)) return
+    if (localStorage.getItem(`nuz-tour-done:${memberToken}`)) return
     const isNewMember = Date.now() - new Date(me.member.createdAt).getTime() < 10 * 60 * 1000
     if (localStorage.getItem('nuz-tour-pending') || isNewMember) {
       localStorage.removeItem('nuz-tour-pending')
@@ -93,7 +93,7 @@ export default function LobbyHome() {
 
   const closeTour = () => {
     setTourOpen(false)
-    localStorage.setItem(`nuz-tour-done:${token}`, '1')
+    localStorage.setItem(`nuz-tour-done:${memberToken}`, '1')
   }
 
   const loadHistory = () => api.get('/api/me/save-history').then(setHistory).catch(() => {})
@@ -126,9 +126,10 @@ export default function LobbyHome() {
       const r = await api.post(`/api/members/${member.id}/regenerate-link`, {})
       const url = `${me.publicUrl || window.location.origin}/m/${r.memberToken}`
       if (isSelf) {
-        forgetLink(token)
+        forgetLink(memberToken)
         rememberLink(r.memberToken, `${me.member.name} @ ${me.lobby.name}`)
-        navigate(`/m/${r.memberToken}`)
+        // straight to the new decoy path — never paint the new secret on screen
+        navigate(pathForToken(r.memberToken))
       } else {
         setRegenLink({ name: r.name, url })
       }
@@ -137,17 +138,44 @@ export default function LobbyHome() {
     }
   }
 
+  const toggleLinkManager = async (member) => {
+    const makeMgr = !member.linkManager
+    if (!window.confirm(makeMgr
+      ? `Make ${member.name} a link manager? They'll be able to mint new secret links for any runner here (and see the new link).`
+      : `Remove ${member.name}'s link-manager permission? They'll still be able to rotate their own link.`)) return
+    try {
+      await api.post(`/api/members/${member.id}/link-manager`, { enabled: makeMgr })
+      refresh()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const toggleRomManager = async (member) => {
+    const makeMgr = !member.romManager
+    if (!window.confirm(makeMgr
+      ? `Make ${member.name} a ROM manager? They'll be able to replace the lobby ROM everyone plays.`
+      : `Remove ${member.name}'s ROM-manager permission?`)) return
+    try {
+      await api.post(`/api/members/${member.id}/rom-manager`, { enabled: makeMgr })
+      refresh()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   const refresh = () => {
     api.get('/api/lobby/summary').then(setSummary).catch(() => {})
     api.get('/api/runs?memberId=me').then(setAttempts).catch(() => {})
-    // keep publicUrl fresh so copied links track the live tunnel
-    api.get('/api/me').then((d) => setMe((prev) => (prev ? { ...prev, publicUrl: d.publicUrl } : d))).catch(() => {})
+    // keep publicUrl fresh so copied links track the live tunnel, and the
+    // member payload fresh so permission changes (link manager) show up
+    api.get('/api/me').then((d) => setMe((prev) => (prev ? { ...prev, publicUrl: d.publicUrl, member: d.member } : d))).catch(() => {})
   }
 
   useEffect(() => {
     api.get('/api/me').then((d) => {
       setMe(d)
-      rememberLink(token, `${d.member.name} @ ${d.lobby.name}`)
+      rememberLink(memberToken, `${d.member.name} @ ${d.lobby.name}`)
     }).catch((e) => setError(e.message))
     api.get('/api/games').then((g) => {
       setGames(g)
@@ -157,7 +185,7 @@ export default function LobbyHome() {
     loadHistory()
     const t = setInterval(refresh, 15000)
     return () => clearInterval(t)
-  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = attempts.find((a) => a.status === 'active')
 
@@ -200,7 +228,7 @@ export default function LobbyHome() {
     setError('')
     try {
       const run = await api.post('/api/runs', { gameId, rules })
-      navigate(`/m/${token}/run/${run.id}`)
+      navigate(`/s/${sid}/run/${run.id}`)
     } catch (err) {
       setError(err.message)
     }
@@ -218,7 +246,9 @@ export default function LobbyHome() {
   // this machine, no matter which origin YOU are browsing from.
   const shareOrigin = me.publicUrl || window.location.origin
   const inviteUrl = `${shareOrigin}/join/${me.lobby.inviteToken}`
-  const myUrl = `${shareOrigin}/m/${token}`
+  // the copy chip shares the REAL secret link — the URL bar's /s/<sid> decoy
+  // is device-local and would be useless to the recipient
+  const myUrl = `${shareOrigin}/m/${memberToken}`
 
   return (
     <div className="app-shell">
@@ -252,13 +282,13 @@ export default function LobbyHome() {
             {active ? (
               <div className="run-card">
                 <div className="info">
-                  <Link to={`/m/${token}/run/${active.id}`}>Attempt #{active.attemptNumber} — {active.name}</Link>
+                  <Link to={`/s/${sid}/run/${active.id}`}>Attempt #{active.attemptNumber} — {active.name}</Link>
                   <div className="sub">
                     {active.gameName} · 🏅{active.badges} · ●{active.alive} alive · ☠{active.deaths} deaths
                   </div>
                 </div>
                 <span className="spacer" />
-                <Link to={`/m/${token}/run/${active.id}`}><button className="small primary"><Play size={12} /> Continue</button></Link>
+                <Link to={`/s/${sid}/run/${active.id}`}><button className="small primary"><Play size={12} /> Continue</button></Link>
               </div>
             ) : (
               <p className="empty-note">No active attempt.</p>
@@ -292,7 +322,7 @@ export default function LobbyHome() {
                 {attempts.filter((a) => a.status !== 'active').map((a) => (
                   <div className="run-card" key={a.id}>
                     <div className="info">
-                      <Link to={`/m/${token}/run/${a.id}`}>Attempt #{a.attemptNumber} — {a.name}</Link>
+                      <Link to={`/s/${sid}/run/${a.id}`}>Attempt #{a.attemptNumber} — {a.name}</Link>
                       <div className="sub">
                         {a.gameName} · 🏅{a.badges} · {a.caught} caught · ☠{a.deaths} deaths
                         {a.endedAt && ` · ended ${new Date(a.endedAt).toLocaleDateString()}`}
@@ -307,16 +337,22 @@ export default function LobbyHome() {
           <div className="panel" data-tour="rom">
             <h2>
               <span className="h2-title"><Gamepad2 size={14} /> Lobby ROM</span>
-              <span className="h-actions">
-                <button className="small" onClick={() => fileRef.current?.click()} disabled={uploading}>
-                  <Upload size={12} /> {uploading ? 'Uploading…' : me.lobby.roms.length ? 'Replace ROM' : 'Upload ROM'}
-                </button>
-              </span>
+              {me.member.romManager && (
+                <span className="h-actions">
+                  <button className="small" onClick={() => fileRef.current?.click()} disabled={uploading}>
+                    <Upload size={12} /> {uploading ? 'Uploading…' : me.lobby.roms.length ? 'Replace ROM' : 'Upload ROM'}
+                  </button>
+                </span>
+              )}
             </h2>
             <input ref={fileRef} type="file" accept=".gb,.gbc,.sgb,.gba,.nds" style={{ display: 'none' }}
               onChange={(e) => e.target.files[0] && uploadRom(e.target.files[0])} />
             {me.lobby.roms.length === 0 ? (
-              <p className="empty-note">No ROM yet — upload the patched ROM this lobby will race. One ROM per lobby; it's served to every runner here, so make sure everyone in the lobby owns their own legal copy of the game.</p>
+              <p className="empty-note">
+                {me.member.romManager
+                  ? 'No ROM yet — upload the patched ROM this lobby will race. One ROM per lobby; it\'s served to every runner here, so make sure everyone in the lobby owns their own legal copy of the game.'
+                  : 'No ROM yet — a ROM manager (the lobby creator, by default) uploads the game this lobby will race.'}
+              </p>
             ) : (
               <div className="run-card">
                 <div className="info">
@@ -342,14 +378,29 @@ export default function LobbyHome() {
           {summary.map((s) => (
             <div className="run-card runner-card" key={s.member.id}>
               {s.live && s.member.id !== me.member.id && (
-                <Link to={`/m/${token}/view/${s.member.id}`} className="runner-stream">
+                <Link to={`/s/${sid}/view/${s.member.id}`} className="runner-stream">
                   <StreamView memberId={s.member.id} interval={1000} compact />
                 </Link>
               )}
               <div className="info">
                 {s.member.id === me.member.id
                   ? <strong>{s.member.name} (you)</strong>
-                  : <Link to={`/m/${token}/view/${s.member.id}`}>{s.member.name}</Link>}
+                  : <Link to={`/s/${sid}/view/${s.member.id}`}>{s.member.name}</Link>}
+                {s.member.id === me.lobby.creatorId && (
+                  <span title="Lobby creator — their link and permissions are protected (host admin only)" style={{ marginLeft: 6, color: 'var(--accent)', verticalAlign: 'middle' }}>
+                    <Crown size={12} style={{ verticalAlign: -2 }} />
+                  </span>
+                )}
+                {s.member.linkManager && (
+                  <span title="Link manager — can regenerate other runners' secret links" style={{ marginLeft: 6, color: 'var(--accent)', verticalAlign: 'middle' }}>
+                    <ShieldCheck size={12} style={{ verticalAlign: -2 }} />
+                  </span>
+                )}
+                {s.member.romManager && (
+                  <span title="ROM manager — can replace the shared lobby ROM" style={{ marginLeft: 4, color: 'var(--accent)', verticalAlign: 'middle' }}>
+                    <Gamepad2 size={12} style={{ verticalAlign: -2 }} />
+                  </span>
+                )}
                 {s.active ? (
                   <div className="sub">
                     Attempt #{s.active.attemptNumber} · {s.active.gameName} · 🏅{s.active.badges} · ●{s.active.alive} alive · ☠{s.active.deaths} deaths
@@ -360,13 +411,29 @@ export default function LobbyHome() {
                 )}
               </div>
               <span className="spacer" />
-              <button
-                className="small"
-                title={s.member.id === me.member.id ? 'Regenerate your secret link (old one stops working)' : `Regenerate ${s.member.name}'s secret link — for when they've lost theirs`}
-                onClick={() => regenerate(s.member)}
-              ><KeyRound size={12} /></button>
+              {(s.member.id === me.member.id || (me.member.linkManager && s.member.id !== me.lobby.creatorId)) && (
+                <button
+                  className="small"
+                  title={s.member.id === me.member.id ? 'Regenerate your secret link (old one stops working)' : `Regenerate ${s.member.name}'s secret link — for when they've lost theirs`}
+                  onClick={() => regenerate(s.member)}
+                ><KeyRound size={12} /></button>
+              )}
+              {me.member.linkManager && s.member.id !== me.member.id && s.member.id !== me.lobby.creatorId && (
+                <button
+                  className="small"
+                  title={s.member.linkManager ? `Remove ${s.member.name}'s link-manager permission` : `Make ${s.member.name} a link manager (can regenerate anyone's secret link)`}
+                  onClick={() => toggleLinkManager(s.member)}
+                >{s.member.linkManager ? <ShieldOff size={12} /> : <ShieldCheck size={12} />}</button>
+              )}
+              {me.member.romManager && s.member.id !== me.member.id && s.member.id !== me.lobby.creatorId && (
+                <button
+                  className={`small ${s.member.romManager ? 'primary' : ''}`}
+                  title={s.member.romManager ? `Remove ${s.member.name}'s ROM-manager permission` : `Make ${s.member.name} a ROM manager (can replace the lobby ROM)`}
+                  onClick={() => toggleRomManager(s.member)}
+                ><Gamepad2 size={12} /></button>
+              )}
               {s.member.id !== me.member.id && (
-                <Link to={`/m/${token}/view/${s.member.id}`}>
+                <Link to={`/s/${sid}/view/${s.member.id}`}>
                   <button className={`small ${s.live ? 'primary' : ''}`}><Eye size={12} /> {s.live ? 'Watch live' : 'Watch'}</button>
                 </Link>
               )}

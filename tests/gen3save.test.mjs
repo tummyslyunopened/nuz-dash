@@ -16,6 +16,8 @@ for (let i = 0; i < 14; i++) {
 
 // Section 0 (offset 0): game code -> nonzero+non-one = Emerald
 dv.setUint32(0 + 0xac, 0xdeadbeef, true)
+// Trainer id (u32 @ 0x0A) — wild mons carry this as OT (trainer-battle detection)
+dv.setUint32(0 + 0x0a, 777001, true)
 
 // Section 1 (offset 0x1000): party count 2 @0x234, party data @0x238
 const sec1 = 0x1000
@@ -66,6 +68,7 @@ writeMon(sec1 + 0x238 + 100, {
 const result = parseGen3Save(buf)
 assert.equal(result.game, 'Emerald')
 assert.equal(result.saveIndex, 5)
+assert.equal(result.trainerId, 777001)
 assert.equal(result.party.length, 2)
 assert.equal(result.party[0].nationalId, 252)
 assert.equal(result.party[0].nickname, 'TREE')

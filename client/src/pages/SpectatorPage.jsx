@@ -4,7 +4,7 @@ import { api, spriteUrl, titleCase, STATUS_META, encounterState } from '../api.j
 import StreamView from '../components/StreamView.jsx'
 
 export default function SpectatorPage() {
-  const { token, memberId } = useParams()
+  const { sid, memberId } = useParams()
   const [attempts, setAttempts] = useState(null)
   const [selected, setSelected] = useState(null)
   const [encounters, setEncounters] = useState([])
@@ -44,7 +44,7 @@ export default function SpectatorPage() {
       <div className="run-header">
         <div className="run-title">
           <h1>👁 {runnerName}</h1>
-          <div className="sub"><Link to={`/m/${token}`} style={{ color: 'var(--muted)' }}>← back to lobby</Link> · spectating (read-only, refreshes every 15s)</div>
+          <div className="sub"><Link to={`/s/${sid}`} style={{ color: 'var(--muted)' }}>← back to lobby</Link> · spectating (read-only, refreshes every 15s)</div>
         </div>
         {run && (
           <div className="stat-tiles">

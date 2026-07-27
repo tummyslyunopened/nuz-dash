@@ -38,6 +38,13 @@ export function defensiveProfile(defTypes) {
   return groups
 }
 
+// Emoji glyphs for compact type badges (toasts etc.)
+export const TYPE_EMOJI = {
+  normal: '⚪', fire: '🔥', water: '💧', electric: '⚡', grass: '🌿', ice: '❄️',
+  fighting: '🥊', poison: '🧪', ground: '⛰️', flying: '🕊️', psychic: '🔮',
+  bug: '🐛', rock: '🪨', ghost: '👻', dragon: '🐉', dark: '🌙', steel: '⚙️', fairy: '✨'
+}
+
 // Canonical franchise type colors (identity colors, not themable)
 export const TYPE_COLORS = {
   normal: '#A8A77A', fire: '#EE8130', water: '#6390F0', electric: '#F7D02C',

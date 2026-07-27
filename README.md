@@ -82,7 +82,21 @@ supports two modes:
   server runs `cloudflared tunnel run` for you and every copied invite/member
   link uses the hostname.
 
+Found a security issue? See [SECURITY.md](SECURITY.md) — report privately to
+**bucket-pox-depose@duck.com** rather than opening a public issue.
+
 Remember: secret links are the only auth, so share them like passwords.
+Streaming? The app is streamer-safe by default: right after you open your
+secret link, the address bar switches to a random decoy session URL
+(`/s/…`) that only works in that browser — screenshots and stream VODs of
+the URL bar leak nothing. Use the "Copy my secret link" button (off-screen)
+when you actually need to share or bookmark the real link. Anyone
+can rotate their own link at any time; minting a new link for *someone else*
+(link recovery) requires the **link manager** permission — the lobby creator has
+it by default and can grant it to other runners from the lobby page (shield
+button), and the admin dashboard can always manage links regardless. Replacing
+the shared lobby ROM works the same way via the **ROM manager** permission
+(creator by default, gamepad button to deputize others, admin override).
 
 ## Onboarding site (nuzdash.dev)
 
@@ -117,6 +131,23 @@ deploys. Environment variables:
 - `ADMIN_TOKEN` — when set, the admin dashboard is ALSO mounted on the main
   app at `/admin` behind HTTP basic auth (user `admin`, password = the token).
   Needed on platforms that expose a single port; leave unset locally.
+
+### Admin two-factor authentication (TOTP)
+
+The admin dashboard supports authenticator-app 2FA (no password — reaching the
+interface is the first factor):
+
+- A cloud `/admin` mount **always** requires it: the first login after basic
+  auth forces enrollment (QR + confirm code), and every later login asks for a
+  code before any data is served.
+- The localhost dashboard is open by default; tick *"require a code to open
+  this dashboard"* in Server settings to enforce 2FA locally too.
+- Brute-force protection: five failed codes trigger an exponential lockout
+  (30 s doubling up to 15 min) that blocks even valid codes, comparisons are
+  constant-time, and each code is accepted at most once (replay-proof).
+- Manage it from Server settings: set up, re-enroll with a fresh secret, or
+  disable (requires a current code). If the authenticator is lost, delete the
+  `adminTotp` block from `settings.json` in your data dir and restart.
 
 On a cloud host the platform provides the public URL — the Cloudflare tunnel
 is unnecessary (ignore the tunnel panel). Railway deploys need a volume

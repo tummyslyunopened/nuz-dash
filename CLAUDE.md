@@ -22,17 +22,37 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
 
 - `lobbies.json`: lobby { id, name, inviteToken, roms:[max ONE rom] }. Upload
   replaces the rom in place keeping its id (attempts stay linked).
-- `members.json`: member { id, token, lobbyId, name, controls }. **token in the
-  URL /m/<token> IS the auth** — sent as `X-Member-Token` header (or `?token=`
-  query for fetches that can't set headers: EmulatorJS ROM fetch). Any lobby
-  member can regenerate any member's token (link recovery).
+- `members.json`: member { id, token, lobbyId, name, controls, linkManager,
+  romManager }. **token in the URL /m/<token> IS the auth** — sent as
+  `X-Member-Token` header (or `?token=` query for fetches that can't set
+  headers: EmulatorJS ROM fetch). Link recovery: anyone can rotate their OWN
+  token; regenerating ANOTHER member's token requires `linkManager` (lobby
+  creator gets it at creation; a boot migration grants it to each lobby's
+  oldest member; managers grant/revoke via POST /api/members/:id/link-manager
+  with a last-manager guard; the admin dashboard can always override).
+  `romManager` follows the exact same model (creator default, same migration,
+  POST /api/members/:id/rom-manager) and gates replacing the SHARED lobby ROM
+  (POST /api/lobby/roms and POST /api/runs/:id/rom); unlinking a ROM from your
+  own attempt (DELETE /api/runs/:id/rom) stays open to everyone. The CREATOR
+  is protected: `lobby.creatorId` (set at creation, healed by the migration to
+  the oldest member) blocks lobby-side changes to the creator's permissions
+  and lobby-side regeneration of the creator's link — admin dashboard only
+  (creator self-rotation still allowed).
 - `runs.json`: a "run" = one ATTEMPT { memberId, lobbyId, attemptNumber, status
   active|archived, gameId, romId, rules, badges, caps, states meta }. One active
   per member; POST /api/runs archives the previous active.
 - `encounters.json` / `diary.json`: keyed by runId.
 - `maps.json`: keyed `` `${lobbyId}|${gameId}` `` (image + pins + nodes).
 - `settings.json`: { autoTunnel, tunnelMode quick|named, tunnelName,
-  tunnelHostname }.
+  tunnelHostname, localStateDownloads, adminTotp { secret base32, requireLocal,
+  lastCounter } }. adminTotp powers admin 2FA (RFC 6238, no deps, qrcode pkg
+  for enrollment QR): cloud /admin ALWAYS requires it and forces enrollment on
+  first login; localhost enforcement is the requireLocal toggle. Session =
+  HttpOnly cookie (in-memory Map, 12h). Brute force: GLOBAL fail counter, 5
+  free tries then exponential lockout 30s→15min (valid codes also rejected
+  while locked); timingSafeEqual compares; lastCounter makes codes single-use
+  (replay = failure). Pending setup secret is memory-only until confirmed.
+  Lost authenticator: delete adminTotp from settings.json + restart.
 - Binary dirs under server/data: roms/, states/ (`<runId>-<slot>.state`, slots
   1,2,3,auto), sprites/ (proxy cache), dumps/ (heap dumps), bugreports/.
 - Save-state "auto" slot: written ONLY when the live-party sync detects a new
@@ -55,13 +75,23 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   A single-session guard (X-Nuz-Session header + /api/runs/:id/session
   heartbeat) makes the server reject sav/state pushes from superseded
   sessions — prevents branching save lineages from concurrent tabs/devices.
+  Launch UX: the Start button is a picker (latest sav default / any
+  historical sav / fresh boot); post-start "Load a save" writes a chosen sav
+  into the emulator FS and calls gameManager.restart() → title screen —
+  the recovery path when boot restore fails (stale browser state).
 - Live streams: in-memory Map only (memberId → jpeg frame), never persisted.
 
 ### Client (`client/`, React + Vite, no TS)
 
-- Routes: `/` Landing, `/join/:invite`, `/m/:token` LobbyHome,
-  `/m/:token/run/:id` RunPage (Play view default), `/m/:token/view/:memberId`
-  Spectator. `MemberScope` in App.jsx sets the api token from the URL.
+- Routes: `/` Landing, `/join/:invite`; `/m/:token(/run/:id|/view/:memberId)`
+  are ENTRY-ONLY — TokenEntry mints a decoy sid (localStorage `nuz-sids`,
+  in-memory overlay for private mode) and replace-redirects to the real UI
+  tree `/s/:sid(/run/:id|/view/:memberId)` (LobbyHome / RunPage / Spectator)
+  so streams never show the secret. `MemberScope` resolves sid→token
+  (device-local, never sent to the server; unknown sid → `/`). NEVER put the
+  member token in an internal route path — real-token flows (copy-secret
+  chip, QR launch, share URLs) read `memberToken` from api.js instead;
+  `forgetLink` also drops the token's sids.
 - `api.js`: fetch helpers + auth header + STATUS_META + localStorage lobby links.
 - Key components: EmulatorPanel (EmulatorJS boot, state slots, streaming
   broadcast, controller sync, auto-resume), LivePartyPanel (save polling,
@@ -111,6 +141,9 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   wild-mon personality stored); annotation happens inline in the Encounters
   table. Catches self-annotate: the party sync matches new party members'
   personality against auto-logged encounters and flips them to "caught".
+  Trainer battles are distinguished by OT id: wild mons carry the PLAYER's
+  trainer id (save TrainerInfo u32 @0x0A) as their OT — validated on a real
+  heap dump; mismatched OT = trainer's mon, acknowledged but never logged.
   In mobile fullscreen, detections show info-only toasts portaled INTO
   #ejs-wrap (native fullscreen renders only descendants).
 - Expansion-hack species enums are the hack's own (often natdex-ordered with

@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Radar, Gamepad2, Map, Users, HeartPulse, BookOpen, Plus, KeyRound, Swords, X } from 'lucide-react'
-import { api, rememberLink, knownLinks, forgetLink } from '../api.js'
+import { api, rememberLink, knownLinks, forgetLink, pathForToken } from '../api.js'
 
 const FEATURES = [
   { icon: Gamepad2, title: 'Play in the browser', text: 'Built-in GB/GBA/NDS emulator with your own patched ROMs, save-state slots, and automatic .srm/.state backups on every in-game save.' },
@@ -32,7 +32,8 @@ export default function Landing() {
       const { memberToken } = await api.post('/api/lobbies', { lobbyName, runnerName })
       rememberLink(memberToken, `${runnerName} @ ${lobbyName}`)
       try { localStorage.setItem('nuz-tour-pending', '1') } catch { /* private mode */ }
-      navigate(`/m/${memberToken}`)
+      // straight to the decoy path — the secret never hits the URL bar
+      navigate(pathForToken(memberToken))
     } catch (err) {
       setError(err.message)
     }
@@ -83,7 +84,7 @@ export default function Landing() {
             links.map((l) => (
               <div className="run-card" key={l.token}>
                 <div className="info">
-                  <Link to={`/m/${l.token}`}>{l.label || 'Lobby'}</Link>
+                  <Link to={pathForToken(l.token)}>{l.label || 'Lobby'}</Link>
                   <div className="sub">last opened {new Date(l.at).toLocaleDateString()}</div>
                 </div>
                 <span className="spacer" />

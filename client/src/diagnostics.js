@@ -27,6 +27,9 @@ const redact = (s) => (memberToken ? s.split(memberToken).join('<member-token>')
 export function collectDiagnostics() {
   return {
     url: redact(window.location.pathname),
+    // Which build the reporter is actually running — stale phone tabs on old
+    // bundles are a real failure mode (see the Clefairy incident)
+    bundle: document.querySelector('script[src*="assets/index-"]')?.getAttribute('src') || 'unknown',
     userAgent: navigator.userAgent,
     viewport: `${window.innerWidth}x${window.innerHeight}`,
     clientTime: new Date().toISOString(),

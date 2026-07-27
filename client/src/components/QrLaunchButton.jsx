@@ -1,12 +1,13 @@
 import React, { useState } from 'react'
 import { QrCode, X, Smartphone } from 'lucide-react'
 import QRCode from 'qrcode'
-import { api } from '../api.js'
+import { api, memberToken } from '../api.js'
 
 // "Play on phone": QR encoding this run's URL (via the public tunnel/host when
 // available). The QR contains the member's SECRET link by design — that's what
-// makes the phone land signed-in — so the modal says exactly that.
-export default function QrLaunchButton({ token, runId }) {
+// makes the phone land signed-in — so the modal says exactly that. (The URL
+// bar shows a decoy /s/ path, so the real token comes from api state.)
+export default function QrLaunchButton({ runId }) {
   const [open, setOpen] = useState(false)
   const [img, setImg] = useState(null)
   const [urlText, setUrlText] = useState('')
@@ -24,7 +25,7 @@ export default function QrLaunchButton({ token, runId }) {
         if (me.publicUrl) origin = me.publicUrl
       } catch { /* fall back to current origin */ }
       setReachable(!/^https?:\/\/(localhost|127\.0\.0\.1)/.test(origin))
-      const url = `${origin}/m/${token}/run/${runId}`
+      const url = `${origin}/m/${memberToken}/run/${runId}`
       setUrlText(url)
       setImg(await QRCode.toDataURL(url, { width: 260, margin: 1 }))
     } catch (err) {

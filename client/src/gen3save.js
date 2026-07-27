@@ -152,6 +152,10 @@ export function parseGen3Save(buffer) {
   const gameCode = dv.getUint32(sec0 + 0xac, true)
   const game = gameCode === 0 ? 'Ruby/Sapphire' : gameCode === 1 ? 'FireRed/LeafGreen' : 'Emerald'
   const partyBase = gameCode === 1 ? 0x034 : 0x234
+  // TrainerInfo: playerName[8], gender, unused, then trainer id u32 @ 0x0A.
+  // Wild mons are created with THIS id as their OT — the basis for telling
+  // wild encounters from trainer battles.
+  const trainerId = dv.getUint32(sec0 + 0x0a, true)
 
   const count = Math.min(dv.getUint32(sec1 + partyBase, true), 6)
   const party = []
@@ -159,5 +163,5 @@ export function parseGen3Save(buffer) {
     const mon = parseMon(dv, u8, sec1 + partyBase + 4 + i * 100)
     if (mon) party.push(mon)
   }
-  return { game, saveIndex: slot.saveIndex, party }
+  return { game, saveIndex: slot.saveIndex, trainerId, party }
 }

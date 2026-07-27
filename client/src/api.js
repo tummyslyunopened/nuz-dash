@@ -17,6 +17,27 @@ export let memberToken = null
 export const setMemberToken = (t) => { memberToken = t || null }
 export const authHeaders = () => (memberToken ? { 'X-Member-Token': memberToken } : {})
 
+// Streamer-safe decoy session ids: after entry, the URL bar shows /s/<sid>
+// instead of the secret /m/<token>. The sid resolves to the token only in
+// THIS browser's localStorage — it is never sent to the server and can't log
+// anyone in. An in-memory overlay keeps navigation working in private mode
+// (where localStorage writes fail); there a hard reload just lands on /.
+const SID_KEY = 'nuz-sids'
+let sidMem = {}
+const sidStored = () => { try { return JSON.parse(localStorage.getItem(SID_KEY) || '{}') } catch { return {} } }
+export const sidForToken = (token) => {
+  const map = { ...sidStored(), ...sidMem }
+  const existing = Object.keys(map).find((k) => map[k] === token)
+  if (existing) return existing
+  const sid = crypto.randomUUID().replaceAll('-', '').slice(0, 12)
+  sidMem[sid] = token
+  try { localStorage.setItem(SID_KEY, JSON.stringify({ ...sidStored(), [sid]: token })) } catch { /* private mode */ }
+  return sid
+}
+export const tokenForSid = (sid) => sidMem[sid] || sidStored()[sid] || null
+// The streamer-visible path for a token (mints a sid on first use)
+export const pathForToken = (token) => `/s/${sidForToken(token)}`
+
 const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...authHeaders() })
 
 export const api = {
@@ -42,6 +63,13 @@ export const forgetLink = (token) => {
     const links = JSON.parse(localStorage.getItem('nuz-links') || '[]').filter((l) => l.token !== token)
     localStorage.setItem('nuz-links', JSON.stringify(links))
   } catch { /* nothing to forget */ }
+  // drop any decoy session ids that resolved to this token
+  for (const k of Object.keys(sidMem)) { if (sidMem[k] === token) delete sidMem[k] }
+  try {
+    const stored = sidStored()
+    for (const k of Object.keys(stored)) { if (stored[k] === token) delete stored[k] }
+    localStorage.setItem(SID_KEY, JSON.stringify(stored))
+  } catch { /* private mode */ }
 }
 
 export const spriteUrl = (id, shiny = false) =>

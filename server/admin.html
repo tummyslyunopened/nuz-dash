@@ -63,6 +63,13 @@
 
 <div id="toast"></div>
 
+<div id="gate2fa" style="display:none; position:fixed; inset:0; background:var(--page); z-index:50; padding:48px 20px; overflow:auto">
+  <div style="max-width:430px; margin:0 auto">
+    <h1 style="margin-bottom:14px">Nuz-Dash <span class="tag">ADMIN</span></h1>
+    <div id="gate2fa-inner"><p class="empty">Loading…</p></div>
+  </div>
+</div>
+
 <script>
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 const fmtSize = (n) => n > 1e6 ? (n/1e6).toFixed(1) + ' MB' : Math.round(n/1e3) + ' KB'
@@ -97,12 +104,129 @@ const inviteUrl = (token) => `${origin()}/join/${token}`
 
 async function loadSrvSettings() {
   const s = await call('GET', 'api/settings')
+  const t = await call('GET', 'api/totp/status')
   document.getElementById('srvsettings').innerHTML = `
     <div class="meta">
       <label><input type="checkbox" ${s.localStateDownloads ? 'checked' : ''} onchange="toggleLocalDownloads(this.checked)">
       Local .state downloads in players' browsers (per in-game save + manual states, plus the one-time
       "allow multiple downloads" priming flow). Off by default — the server pair and history are the backups.</label>
+    </div>
+    <div class="meta" style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px">
+      <b>Admin 2FA (authenticator app):</b> ${t.enrolled ? '<span style="color:var(--good)">enrolled ✓</span>' : 'not set up'}
+      — a cloud /admin mount ${t.enrolled ? 'asks for a code at every login' : 'forces enrollment on its first login'}.
+      ${t.enrolled ? `
+        <label style="display:block; margin-top:8px"><input type="checkbox" ${t.requireLocal ? 'checked' : ''} onchange="totpLocalRequire(this.checked)">
+        Also require a code to open THIS localhost dashboard</label>
+        <div style="margin-top:8px">
+          <button onclick="totpStartEnroll()">Re-enroll (new secret)</button>
+          <button class="danger" onclick="totpDisable()">Disable 2FA</button>
+        </div>`
+      : `<div style="margin-top:8px"><button class="primary" onclick="totpStartEnroll()">Set up 2FA</button></div>`}
+      <div id="totp-enroll-box"></div>
     </div>`
+}
+
+// ---------- 2FA ----------
+// Like call(), but surfaces the brute-force lockout countdown on errors
+async function totpPost(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const wait = data.retryAfterMs ? ` — locked for ${Math.ceil(data.retryAfterMs / 1000)}s` : ''
+    throw new Error((data.error || res.status) + wait)
+  }
+  return data
+}
+
+function totpCodeInput(action) {
+  return `<div class="row" style="margin-top:8px">
+    <input id="totp-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"
+      onkeydown="if(event.key==='Enter')${action}"
+      style="width:110px; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 10px; font-size:16px; letter-spacing:.2em">
+    <button class="primary" onclick="${action}">Confirm</button>
+  </div>
+  <p class="meta" id="totp-msg"></p>`
+}
+
+async function renderEnroll(el, forced) {
+  el.innerHTML = '<p class="empty">Generating secret…</p>'
+  let s
+  try { s = await totpPost('api/totp/setup', {}) } catch (e) { el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; return }
+  el.innerHTML = `
+    <div class="card" style="margin-top:10px">
+      <div class="name">${forced ? 'Set up two-factor authentication' : 'Enroll authenticator'}</div>
+      <p class="meta">${forced ? 'This admin requires 2FA before continuing. ' : ''}Scan with an authenticator app
+      (Google Authenticator, Aegis, 1Password…), then enter the current 6-digit code to confirm.</p>
+      ${s.qr ? `<img src="${s.qr}" alt="TOTP enrollment QR" style="border-radius:8px; background:#fff; padding:6px; display:block">` : ''}
+      <p class="meta">Manual entry secret: <code>${esc(s.secret)}</code></p>
+      ${totpCodeInput(`totpConfirm(${forced})`)}
+    </div>`
+  document.getElementById('totp-code').focus()
+}
+
+async function totpConfirm(forced) {
+  const code = document.getElementById('totp-code').value.trim()
+  try {
+    await totpPost('api/totp/confirm', { code })
+    if (forced) { hideGateAndBoot() } else { toast('2FA enabled'); loadSrvSettings() }
+  } catch (e) {
+    document.getElementById('totp-msg').textContent = e.message
+  }
+}
+
+function renderVerifyGate() {
+  document.getElementById('gate2fa-inner').innerHTML = `
+    <div class="card">
+      <div class="name">Two-factor authentication</div>
+      <p class="meta">Enter the 6-digit code from your authenticator app.</p>
+      ${totpCodeInput('totpVerify()')}
+    </div>`
+  document.getElementById('totp-code').focus()
+}
+
+async function totpVerify() {
+  const code = document.getElementById('totp-code').value.trim()
+  try {
+    await totpPost('api/totp/verify', { code })
+    hideGateAndBoot()
+  } catch (e) {
+    document.getElementById('totp-msg').textContent = e.message
+  }
+}
+
+function hideGateAndBoot() {
+  document.getElementById('gate2fa').style.display = 'none'
+  startDashboard()
+}
+
+async function totpStartEnroll() {
+  renderEnroll(document.getElementById('totp-enroll-box'), false)
+}
+
+async function totpLocalRequire(enabled) {
+  try {
+    await call('POST', 'api/totp/local-require', { enabled })
+    toast(enabled ? 'This dashboard now asks for a code' : 'Local 2FA requirement removed')
+  } catch (e) {
+    toast(e.message)
+    loadSrvSettings()
+  }
+}
+
+async function totpDisable() {
+  const code = prompt('Enter the current 6-digit code to disable 2FA:')
+  if (!code) return
+  try {
+    await totpPost('api/totp/disable', { code: code.trim() })
+    toast('2FA disabled')
+    loadSrvSettings()
+  } catch (e) {
+    toast(e.message)
+  }
 }
 
 async function toggleLocalDownloads(enabled) {
@@ -250,7 +374,7 @@ async function loadLobbies() {
         <tr><th>Runner</th><th>Status</th><th>Attempts</th><th>Personal link</th><th></th></tr>
         ${l.members.map((m) => `
           <tr>
-            <td>${esc(m.name)} ${m.live ? '<span class="live">● LIVE</span>' : ''}</td>
+            <td>${esc(m.name)} ${m.id === l.creatorId ? '<span class="meta" title="Lobby creator — protected from lobby-side permission and link changes">👑</span>' : ''} ${m.linkManager ? '<span class="meta" title="Link manager — can regenerate secret links of other runners">🛡</span>' : ''} ${m.romManager ? '<span class="meta" title="ROM manager — can replace the shared lobby ROM">🎮</span>' : ''} ${m.live ? '<span class="live">● LIVE</span>' : ''}</td>
             <td class="meta">${m.active
               ? `#${m.active.attemptNumber} ${esc(m.active.gameName)} · 🏅${m.active.badges} · ●${m.active.alive} · ☠${m.active.deaths}`
               : 'no active attempt'}</td>
@@ -258,6 +382,8 @@ async function loadLobbies() {
             <td><button onclick="copyText('${esc(memberUrl(m.token))}')">copy link</button></td>
             <td style="text-align:right; white-space:nowrap">
               <button onclick="regen('${m.id}', '${esc(m.name)}')">new link</button>
+              <button onclick="setLinkManager('${m.id}', '${esc(m.name)}', ${m.linkManager ? 'false' : 'true'})">${m.linkManager ? 'revoke link mgr' : 'make link mgr'}</button>
+              <button onclick="setRomManager('${m.id}', '${esc(m.name)}', ${m.romManager ? 'false' : 'true'})">${m.romManager ? 'revoke ROM mgr' : 'make ROM mgr'}</button>
               <button class="danger" onclick="deleteMember('${m.id}', '${esc(m.name)}')">remove</button>
             </td>
           </tr>`).join('')}
@@ -301,6 +427,18 @@ async function deleteMember(id, name) {
   loadLobbies()
 }
 
+async function setLinkManager(id, name, enabled) {
+  await call('POST', `api/members/${id}/link-manager`, { enabled })
+  toast(enabled ? `${name} is now a link manager` : `${name} is no longer a link manager`)
+  loadLobbies()
+}
+
+async function setRomManager(id, name, enabled) {
+  await call('POST', `api/members/${id}/rom-manager`, { enabled })
+  toast(enabled ? `${name} is now a ROM manager` : `${name} is no longer a ROM manager`)
+  loadLobbies()
+}
+
 async function regen(id, name) {
   if (!confirm(`Generate a new secret link for "${name}"? Their old link stops working.`)) return
   const r = await call('POST', `api/members/${id}/regenerate`)
@@ -327,15 +465,31 @@ async function deleteBug(file) {
   loadBugs()
 }
 
-async function boot() {
+let pollStarted = false
+async function startDashboard() {
   try { await loadSrvSettings() } catch (e) { document.getElementById('srvsettings').innerHTML = `<p class="empty">${esc(e.message)}</p>` }
   try { await loadTunnel() } catch (e) { document.getElementById('tunnel').innerHTML = `<p class="empty">${esc(e.message)}</p>` }
   loadLobbies().catch((e) => { document.getElementById('lobbies').innerHTML = `<p class="empty">${esc(e.message)}</p>` })
   loadStorage().catch((e) => { document.getElementById('storage').innerHTML = `<p class="empty">${esc(e.message)}</p>` })
   loadBugs().catch((e) => { document.getElementById('bugs').innerHTML = `<p class="empty">${esc(e.message)}</p>` })
+  if (!pollStarted) {
+    pollStarted = true
+    setInterval(() => { loadTunnel().then(loadLobbies).then(loadStorage).catch(() => {}) }, 30000)
+  }
+}
+
+async function boot() {
+  let t = null
+  try { t = await call('GET', 'api/totp/status') } catch { /* older server: no gate */ }
+  if (t && t.required && !t.authed) {
+    document.getElementById('gate2fa').style.display = 'block'
+    if (t.enrolled) renderVerifyGate()
+    else renderEnroll(document.getElementById('gate2fa-inner'), true)
+    return
+  }
+  startDashboard()
 }
 boot()
-setInterval(() => { loadTunnel().then(loadLobbies).then(loadStorage).catch(() => {}) }, 30000)
 </script>
 </body>
 </html>

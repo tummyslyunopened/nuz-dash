@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Radar, ScanSearch, HardDriveDownload } from 'lucide-react'
 import { api, spriteUrl, titleCase, authHeaders } from '../api.js'
+import { TYPE_COLORS, TYPE_EMOJI } from '../typechart.js'
 import { calibrate, scanEnemies, probe, deepScan, dumpHeap, findSpeciesTable, speciesTableName } from '../gen3ram.js'
 import { loadIndex } from './PokemonSearch.jsx'
 import { emulatorRunning } from './EmulatorPanel.jsx'
 
-export default function EncounterRadar({ run, encounters, party, onLogged }) {
+export default function EncounterRadar({ run, encounters, party, trainerId, onLogged }) {
   const [watching, setWatching] = useState(false)
   const [candidates, setCandidates] = useState([])
   const [recent, setRecent] = useState([]) // latest auto-logged detections
@@ -41,11 +42,18 @@ export default function EncounterRadar({ run, encounters, party, onLogged }) {
     return () => window.removeEventListener('nuz:mobile-fs', h)
   }, [])
 
-  const addToast = (mon, name) => {
-    const toast = { mon, name, id: `${mon.personality}-${Date.now()}` }
+  const addToast = (mon, name, trainer = false) => {
+    const toast = { mon, name, trainer, id: `${mon.personality}-${Date.now()}`, types: null }
     setToasts((t) => [...t, toast])
     try { navigator.vibrate?.(80) } catch { /* fine */ }
-    setTimeout(() => setToasts((t) => t.filter((x) => x !== toast)), 8000)
+    // Typing arrives async from the cached PokeAPI proxy; the pills pop in
+    // when resolved. (Regional-form hacks may show the base form's typing.)
+    if (name) {
+      api.get(`/api/pokemon/${name}`)
+        .then((p) => setToasts((t) => t.map((x) => (x.id === toast.id ? { ...x, types: p.types } : x))))
+        .catch(() => {})
+    }
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000)
   }
 
   // Attach the best available species name/national id to a detected mon.
@@ -90,6 +98,15 @@ export default function EncounterRadar({ run, encounters, party, onLogged }) {
       setRecent((r) => [{ mon, name }, ...r].slice(0, 6))
       if (window.__nuzMobileFs) addToast(mon, name)
     } catch { /* server hiccup — radar keeps running */ }
+  }
+
+  // Trainer battle: acknowledged, never logged. Wild mons carry the PLAYER's
+  // trainer id as their OT (validated against a real heap dump); anything
+  // else in the enemy slot belongs to a trainer.
+  const noteTrainerBattle = (mon) => {
+    const name = mon._name || (mon.nationalId && idToName[mon.nationalId]) || ''
+    setRecent((r) => [{ mon, name, trainer: true }, ...r].slice(0, 6))
+    if (window.__nuzMobileFs) addToast(mon, name, true)
   }
 
   const stoppedByUserRef = useRef(false)
@@ -158,7 +175,10 @@ export default function EncounterRadar({ run, encounters, party, onLogged }) {
         for (const raw of enemies) {
           seenRef.current.add(raw.personality)
           const mon = enrich(raw)
-          if (mon && primedRef.current) autoLog(mon)
+          if (!mon || !primedRef.current) continue
+          const isTrainerMon = trainerId != null && (mon.otId >>> 0) !== (trainerId >>> 0)
+          if (isTrainerMon) noteTrainerBattle(mon)
+          else autoLog(mon)
         }
         primedRef.current = true
         setScanCount((c) => c + 1)
@@ -236,12 +256,25 @@ export default function EncounterRadar({ run, encounters, party, onLogged }) {
       {fsWrap && toasts.length > 0 && createPortal(
         <div className="fs-toasts">
           {toasts.map((t) => (
-            <div className="fs-toast" key={t.id}>
+            <div className={`fs-toast ${t.trainer ? 'trainer' : ''}`} key={t.id}>
               {t.mon.nationalId ? <img src={spriteUrl(t.mon.nationalId, t.mon.shiny)} alt="" /> : null}
               <div className="ft-text">
-                Wild <strong>{monLabel(t.mon, t.name)}</strong> · Lv. {t.mon.level}
-                {t.mon.shiny && <span className="shiny-star"> ✦</span>}
-                <span className="ft-logged"> — logged ✓</span>
+                <div>
+                  {t.trainer ? 'Trainer battle · ' : 'Wild '}<strong>{monLabel(t.mon, t.name)}</strong> · Lv. {t.mon.level}
+                  {t.mon.shiny && <span className="shiny-star"> ✦</span>}
+                  {t.trainer
+                    ? <span className="ft-skipped"> — not an encounter</span>
+                    : <span className="ft-logged"> — logged ✓</span>}
+                </div>
+                {t.types && (
+                  <div className="ft-types">
+                    {t.types.map((ty) => (
+                      <span key={ty} className="type-pill" style={{ background: TYPE_COLORS[ty] || 'var(--surface-2)' }}>
+                        {TYPE_EMOJI[ty] || ''} {titleCase(ty)}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <button className="small" onClick={() => setToasts((x) => x.filter((y) => y !== t))}>✕</button>
             </div>
@@ -270,20 +303,20 @@ export default function EncounterRadar({ run, encounters, party, onLogged }) {
       {recent.length > 0 && (
         <div className="radar-recent">
           {recent.map((r, i) => (
-            <div className="rr-row" key={`${r.mon.personality}-${i}`}>
+            <div className={`rr-row ${r.trainer ? 'rr-trainer' : ''}`} key={`${r.mon.personality}-${i}`}>
               {r.mon.nationalId ? <img src={spriteUrl(r.mon.nationalId, r.mon.shiny)} alt="" /> : <span className="rr-noimg">?</span>}
               <span>
                 <strong>{monLabel(r.mon, r.name)}</strong> · Lv. {r.mon.level}
                 {r.mon.shiny && <span className="shiny-star"> ✦</span>}
               </span>
-              <span className="rr-note">logged — annotate in Encounters</span>
+              <span className="rr-note">{r.trainer ? 'trainer battle — ignored' : 'logged — annotate in Encounters'}</span>
             </div>
           ))}
         </div>
       )}
       {watching && status && (
         <p className="map-tip">
-          {status} Scans: {scanCount}. Every detection is auto-logged (trainer battles too — delete those from Encounters).
+          {status} Scans: {scanCount}. Wild battles auto-log; trainer battles are recognized (by OT id) and ignored.
           Catches flip to ● Caught automatically when the Pokemon joins your synced party.
         </p>
       )}

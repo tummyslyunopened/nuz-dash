@@ -411,6 +411,22 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 }
 .fs-toast img { width: 40px; height: 40px; image-rendering: pixelated; flex: none; }
 .fs-toast .ft-text { flex: 1; min-width: 0; font-size: 13.5px; }
+.fs-toast.trainer { border-color: var(--muted); opacity: 0.92; }
+.ft-skipped { color: var(--muted); font-size: 12px; }
+.rr-trainer { opacity: 0.65; }
+.ft-types { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #0d0d0d;
+  text-transform: capitalize;
+  animation: toast-in 0.2s ease;
+}
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: none; }
@@ -446,6 +462,9 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
   justify-content: center;
   opacity: 0.8;
 }
+
+.launch-row { display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap; }
+.launch-row select { max-width: 280px; }
 
 .state-slots { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .state-slot {
