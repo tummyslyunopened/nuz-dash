@@ -11,6 +11,7 @@ import LivePartyPanel from '../components/LivePartyPanel.jsx'
 import EncounterRadar from '../components/EncounterRadar.jsx'
 import WatchPartyPanel from '../components/WatchPartyPanel.jsx'
 import QrLaunchButton from '../components/QrLaunchButton.jsx'
+import TrainersPanel from '../components/TrainersPanel.jsx'
 
 export default function RunPage() {
   const { sid, id } = useParams()
@@ -23,6 +24,9 @@ export default function RunPage() {
   const [prefill, setPrefill] = useState(null)
   const [lastParty, setLastParty] = useState([])
   const [trainerId, setTrainerId] = useState(null)
+  const [savInfo, setSavInfo] = useState(null) // sav-derived layout facts for the radar
+  const [area, setArea] = useState('') // live current location from the radar
+  const [trainers, setTrainers] = useState([])
 
   useEffect(() => {
     api.get(`/api/runs/${id}`).then((r) => {
@@ -31,6 +35,7 @@ export default function RunPage() {
       api.get(`/api/locations/${r.gameId}`).then(setLocations).catch(() => setLocations([]))
     }).catch((e) => setError(e.message))
     api.get(`/api/runs/${id}/encounters`).then(setEncounters).catch(() => {})
+    api.get(`/api/runs/${id}/trainers`).then(setTrainers).catch(() => {})
   }, [id])
 
   if (error) {
@@ -172,14 +177,19 @@ export default function RunPage() {
               encounters={encounters}
               party={lastParty}
               trainerId={trainerId}
+              savInfo={savInfo}
               onLogged={(enc) => setEncounters((es) => [...es, enc])}
+              onUnlogged={(encId) => setEncounters((es) => es.filter((e) => e.id !== encId))}
+              onArea={setArea}
+              onTrainerLogged={(t) => setTrainers((ts) => (ts.some((x) => x.id === t.id) ? ts.map((x) => (x.id === t.id ? t : x)) : [...ts, t]))}
             />
             <LivePartyPanel
               run={run}
               encounters={encounters}
+              area={area}
               onMarkDead={markEncounterDead}
               onImport={importFromGame}
-              onParty={(party, tid) => { setLastParty(party); if (tid != null) setTrainerId(tid) }}
+              onParty={(party, tid, parsed) => { setLastParty(party); if (tid != null) setTrainerId(tid); if (parsed) setSavInfo(parsed) }}
               onAutoCaught={autoCaught}
             />
           </div>
@@ -190,6 +200,7 @@ export default function RunPage() {
         </div>
         <div className="dash-col">
           <EncountersPanel run={run} encounters={encounters} setEncounters={setEncounters} locations={locations} prefill={prefill} />
+          <TrainersPanel run={run} trainers={trainers} setTrainers={setTrainers} />
           <div style={{ display: view === 'play' ? 'block' : 'none' }}>
             <WatchPartyPanel />
           </div>

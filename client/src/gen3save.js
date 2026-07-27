@@ -163,5 +163,17 @@ export function parseGen3Save(buffer) {
     const mon = parseMon(dv, u8, sec1 + partyBase + 4 + i * 100)
     if (mon) party.push(mon)
   }
-  return { game, saveIndex: slot.saveIndex, trainerId, party }
+  return {
+    game,
+    saveIndex: slot.saveIndex,
+    trainerId,
+    party,
+    // Section 1 IS the start of SaveBlock1: pos.x/y (two s16) then the warp
+    // location — mapGroup/mapNum. This is the save-time location; the LIVE
+    // location comes from finding SaveBlock1 in emulator memory (gen3ram).
+    location: { mapGroup: u8[sec1 + 4], mapNum: u8[sec1 + 5] },
+    // Offset of party mon 0 within SaveBlock1 — the anchor that lets the
+    // radar derive SaveBlock1's live address from its calibrated party hits.
+    partyMonsOffset: partyBase + 4
+  }
 }

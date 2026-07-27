@@ -154,6 +154,48 @@ export function deepScanIn(heap, candidates, isKnownPersonality, range = 0x4000)
   return found
 }
 
+// ---------------------------------------------------------------------------
+// Live location: SaveBlock1 starts with pos.x/y + warp location, and contains
+// a party copy at a known offset (learned from the SAV layout, not hardcoded).
+// Among the calibrated party candidates, exactly one is SaveBlock1's party
+// copy — subtracting the offset lands on SaveBlock1 itself, whose location
+// bytes update live as the player moves.
+
+export function locateSaveBlock1In(heap, candidates, partyMonsOffset, savLocation) {
+  if (!partyMonsOffset) return null
+  const dv = new DataView(heap.buffer, heap.byteOffset, heap.byteLength)
+  const sane = []
+  for (const base of candidates) {
+    const sb1 = base - partyMonsOffset
+    if (sb1 < 0 || sb1 + 8 > heap.byteLength) continue
+    const x = dv.getInt16(sb1, true)
+    const y = dv.getInt16(sb1 + 2, true)
+    const group = heap[sb1 + 4]
+    const num = heap[sb1 + 5]
+    if (x < -16 || x > 4000 || y < -16 || y > 4000) continue
+    if (group > 63 || num > 200) continue
+    sane.push({ sb1, group, num })
+  }
+  if (!sane.length) return null
+  // Right after a load/sync the live location equals the save's — prefer the
+  // candidate that agrees; otherwise the first structurally-sane one.
+  const savMatch = savLocation &&
+    sane.find((s) => s.group === savLocation.mapGroup && s.num === savLocation.mapNum)
+  return (savMatch || sane[0]).sb1
+}
+
+export function readLocationIn(heap, sb1) {
+  if (sb1 == null || sb1 < 0 || sb1 + 6 > heap.byteLength) return null
+  const group = heap[sb1 + 4]
+  const num = heap[sb1 + 5]
+  if (group > 63 || num > 200) return null
+  return { mapGroup: group, mapNum: num }
+}
+
+export const locateSaveBlock1 = (candidates, partyMonsOffset, savLocation) =>
+  locateSaveBlock1In(getHeap(), candidates, partyMonsOffset, savLocation)
+export const readLocation = (sb1) => readLocationIn(getHeap(), sb1)
+
 export const calibrate = (party) => calibrateIn(getHeap(), party)
 export const scanEnemies = (candidates, isKnown, deltas) => scanEnemiesIn(getHeap(), candidates, isKnown, deltas)
 export const probe = (candidates) => probeIn(getHeap(), candidates)

@@ -52,6 +52,11 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   active|archived, gameId, romId, rules, badges, caps, states meta }. One active
   per member; POST /api/runs archives the previous active.
 - `encounters.json` / `diary.json`: keyed by runId.
+- `trainers.json`: trainer battles grouped by (runId, opposing OT id) — one
+  record per trainer { id, runId, otId, name, location, status seen|beaten,
+  notes, mons:[{speciesName, speciesId, level, personality}] }. Radar upserts
+  via POST /api/runs/:id/trainers (dedupes mons by personality); annotate via
+  PUT /api/trainers/:id. Reads lobby-wide, writes owner-only.
 - `maps.json`: keyed `` `${lobbyId}|${gameId}` `` (image + pins + nodes).
 - `settings.json`: { autoTunnel, tunnelMode quick|named, tunnelName,
   tunnelHostname, localStateDownloads, romCleanMode, adminTotp { secret base32,
@@ -153,9 +158,23 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   personality against auto-logged encounters and flips them to "caught".
   Trainer battles are distinguished by OT id: wild mons carry the PLAYER's
   trainer id (save TrainerInfo u32 @0x0A) as their OT — validated on a real
-  heap dump; mismatched OT = trainer's mon, acknowledged but never logged.
+  heap dump; mismatched OT = trainer's mon, never logged as an encounter but
+  UPSERTED into the trainers list (grouped by OT id, TrainersPanel UI).
   In mobile fullscreen, detections show info-only toasts portaled INTO
-  #ejs-wrap (native fullscreen renders only descendants).
+  #ejs-wrap (native fullscreen renders only descendants). Wild toasts carry a
+  "✕ false?" button (also on the radar's recent rows): deletes the encounter
+  + auto-files a bug report inline — NO dialogs, so fullscreen survives.
+  **Live location** (same no-hardcoded-addresses philosophy): parseGen3Save
+  returns partyMonsOffset (party position within SaveBlock1, from the sav
+  layout) + save-time location (SaveBlock1 starts section 1: x,y s16 then
+  mapGroup/mapNum bytes @+4/+5). gen3ram locateSaveBlock1In subtracts that
+  offset from each calibrated party candidate and picks the one with a sane
+  header (preferring a sav-location match) — its bytes then read LIVE each
+  radar tick (validated on real dumps: Route 101, consistent across all 4).
+  (group,num)→name via client/src/gen3maps.js (vanilla-Emerald constant DATA,
+  floors collapsed to areas for dupes-clause semantics; unknown → editable
+  "Area g.n"). Area flows into: Live party 📍 chip, toasts, auto-logged
+  encounter locations, trainer records. Party sync polls at 1s.
 - Expansion-hack species enums are the hack's own (often natdex-ordered with
   forms appended) — never assume PokeAPI ids match; resolve via the ROM table.
 - Debug tools already built in: radar Diagnostics panel, Deep scan (during

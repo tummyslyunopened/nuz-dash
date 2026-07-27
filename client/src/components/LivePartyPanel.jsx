@@ -12,7 +12,7 @@ const hpClass = (hp, maxHp) => {
   return pct > 0.5 ? 'hp-good' : pct > 0.2 ? 'hp-warn' : 'hp-crit'
 }
 
-export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, onParty, onAutoCaught }) {
+export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, onParty, onAutoCaught, area }) {
   const [party, setParty] = useState(null)
   const [game, setGame] = useState('')
   const [source, setSource] = useState('')
@@ -78,7 +78,9 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
     setGame(parsed.game)
     setSource(src)
     setError('')
-    onParty?.(parsed.party, parsed.trainerId)
+    // Third arg carries the sav-derived layout facts (save-time location +
+    // party offset in SaveBlock1) that anchor the radar's live location read.
+    onParty?.(parsed.party, parsed.trainerId, parsed)
   }
 
   const downloadBlob = (bytes, filename) => {
@@ -153,7 +155,7 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
     // detection — all cheap local work (SRAM flush + 128KB parse).
     const t = setInterval(() => {
       if (emulatorRunning()) syncFromEmulator()
-    }, 3000)
+    }, 1000)
     return () => clearInterval(t)
   }, [auto]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -206,10 +208,14 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
   return (
     <div className="panel">
       <h2>
-        <span className="h2-title"><HeartPulse size={14} /> Live party</span> <span style={{ textTransform: 'none', letterSpacing: 0 }}>{game && `· ${game}`}</span>
+        <span className="h2-title"><HeartPulse size={14} /> Live party</span>
+        <span style={{ textTransform: 'none', letterSpacing: 0 }}>
+          {game && `· ${game}`}
+          {area && <span className="chip" style={{ marginLeft: 8, verticalAlign: 'middle' }} title="Current location, read live from the game's memory">📍 {area}</span>}
+        </span>
         <span className="h-actions">
           <label style={{ fontSize: 12, display: 'inline-flex', gap: 5, alignItems: 'center', textTransform: 'none', letterSpacing: 0 }}>
-            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto (3s)
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto (1s)
           </label>
           <button className="small" onClick={() => fileRef.current?.click()} title="Parse a .sav file from any emulator"><FileUp size={12} /> Load .sav</button>
           <button className="small primary" onClick={syncFromEmulator}><RefreshCw size={12} /> Sync from game</button>

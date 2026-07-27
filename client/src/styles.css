@@ -413,7 +413,25 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 .fs-toast .ft-text { flex: 1; min-width: 0; font-size: 13.5px; }
 .fs-toast.trainer { border-color: var(--muted); opacity: 0.92; }
 .ft-skipped { color: var(--muted); font-size: 12px; }
+.ft-area { color: var(--text2); font-size: 12px; margin-top: 2px; }
+.ft-false { border-color: var(--serious); color: var(--serious); flex: none; white-space: nowrap; }
 .rr-trainer { opacity: 0.65; }
+/* Trainers panel: one row per opposing trainer, their mons as mini sprites */
+.trainer-row { padding: 6px 0; border-bottom: 1px solid rgba(196, 181, 253, 0.07); }
+.trainer-row:last-child { border-bottom: none; }
+.trainer-mons { display: inline-flex; gap: 2px; flex-wrap: wrap; align-items: flex-end; }
+.trainer-mon { position: relative; display: inline-flex; }
+.trainer-mon img { width: 30px; height: 30px; image-rendering: pixelated; }
+.tm-lv {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  font-size: 9px;
+  background: var(--surface2);
+  border-radius: 5px;
+  padding: 0 3px;
+  color: var(--text2);
+}
 .ft-types { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
 .type-pill {
   display: inline-flex;

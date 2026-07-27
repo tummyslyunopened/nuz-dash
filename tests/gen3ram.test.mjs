@@ -1,7 +1,8 @@
 // Synthetic-heap tests for the encounter radar (calibration, enemy scan,
 // deep scan, candidate ranking, ROM species-name table discovery).
 import assert from 'node:assert'
-import { calibrateIn, scanEnemiesIn, deepScanIn, findSpeciesTableIn, speciesTableNameIn } from '../client/src/gen3ram.js'
+import { calibrateIn, scanEnemiesIn, deepScanIn, findSpeciesTableIn, speciesTableNameIn, locateSaveBlock1In, readLocationIn } from '../client/src/gen3ram.js'
+import { mapAreaName, areaLabel } from '../client/src/gen3maps.js'
 
 const heap = new Uint8Array(1 << 20) // 1MB fake WASM heap
 const dv = new DataView(heap.buffer)
@@ -130,5 +131,35 @@ assert.ok(table, 'species table located')
 assert.equal(table.stride, 260)
 assert.equal(speciesTableNameIn(heap, table, 412), 'Burmy')
 assert.equal(speciesTableNameIn(heap, table, 959), 'Sandshrew')
+
+// Live location: the stale party copy at 0x90000 stands in for SaveBlock1's
+// party (Emerald mon-0 offset 0x238). SaveBlock1 starts with pos x/y then
+// location mapGroup/mapNum — locateSaveBlock1In must pick THAT candidate
+// (its header is sane and matches the sav) over the gPlayerParty candidate
+// (whose "header" bytes are whatever precedes it in memory).
+const PARTY_MONS_OFFSET = 0x238
+const sb1 = staleAddr - PARTY_MONS_OFFSET
+dv.setInt16(sb1, 12, true) // pos.x
+dv.setInt16(sb1 + 2, 30, true) // pos.y
+heap[sb1 + 4] = 0 // mapGroup
+heap[sb1 + 5] = 17 // mapNum -> Route 102
+// make the OTHER candidate's would-be header insane so it can't be chosen
+dv.setInt16(partyAddr - PARTY_MONS_OFFSET, 30000, true)
+const foundSb1 = locateSaveBlock1In(heap, candidates, PARTY_MONS_OFFSET, { mapGroup: 0, mapNum: 17 })
+assert.equal(foundSb1, sb1, 'SaveBlock1 located via sav-anchored party offset')
+assert.deepEqual(readLocationIn(heap, foundSb1), { mapGroup: 0, mapNum: 17 })
+// walking to a new map updates the live read
+heap[sb1 + 5] = 18
+assert.deepEqual(readLocationIn(heap, foundSb1), { mapGroup: 0, mapNum: 18 })
+
+// Area names: routes, towns, collapsed dungeons, safari, fallback
+assert.equal(mapAreaName(0, 17), 'Route 102')
+assert.equal(mapAreaName(0, 49), 'Route 134')
+assert.equal(mapAreaName(0, 9), 'Littleroot Town')
+assert.equal(mapAreaName(24, 11), 'Petalburg Woods')
+assert.equal(mapAreaName(24, 8), 'Granite Cave')
+assert.equal(mapAreaName(26, 2), 'Safari Zone')
+assert.equal(mapAreaName(31, 5), null)
+assert.equal(areaLabel(31, 5), 'Area 31.5')
 
 console.log('gen3ram: all assertions passed')

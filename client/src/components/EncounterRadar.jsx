@@ -3,11 +3,13 @@ import { createPortal } from 'react-dom'
 import { Radar, ScanSearch, HardDriveDownload } from 'lucide-react'
 import { api, spriteUrl, titleCase, authHeaders } from '../api.js'
 import { TYPE_COLORS, TYPE_EMOJI } from '../typechart.js'
-import { calibrate, scanEnemies, probe, deepScan, dumpHeap, findSpeciesTable, speciesTableName } from '../gen3ram.js'
+import { calibrate, scanEnemies, probe, deepScan, dumpHeap, findSpeciesTable, speciesTableName, locateSaveBlock1, readLocation } from '../gen3ram.js'
+import { areaLabel } from '../gen3maps.js'
+import { collectDiagnostics } from '../diagnostics.js'
 import { loadIndex } from './PokemonSearch.jsx'
 import { emulatorRunning } from './EmulatorPanel.jsx'
 
-export default function EncounterRadar({ run, encounters, party, trainerId, onLogged }) {
+export default function EncounterRadar({ run, encounters, party, trainerId, savInfo, onLogged, onUnlogged, onArea, onTrainerLogged }) {
   const [watching, setWatching] = useState(false)
   const [candidates, setCandidates] = useState([])
   const [recent, setRecent] = useState([]) // latest auto-logged detections
@@ -25,6 +27,13 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
   const primedRef = useRef(false)
   const tableRef = useRef(null) // species-name table found in the game's memory
   const nameToIdRef = useRef({})
+  // Live location: SaveBlock1's heap address (found at calibration) + the
+  // current area name it resolves to each tick.
+  const sb1Ref = useRef(null)
+  const areaRef = useRef('')
+  const [area, setArea] = useState('')
+  const savInfoRef = useRef(null)
+  savInfoRef.current = savInfo
 
   useEffect(() => {
     loadIndex().then((index) => {
@@ -42,8 +51,8 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
     return () => window.removeEventListener('nuz:mobile-fs', h)
   }, [])
 
-  const addToast = (mon, name, trainer = false) => {
-    const toast = { mon, name, trainer, id: `${mon.personality}-${Date.now()}`, types: null }
+  const addToast = (mon, name, opts = {}) => {
+    const toast = { mon, name, ...opts, id: `${mon.personality}-${Date.now()}`, types: null }
     setToasts((t) => [...t, toast])
     try { navigator.vibrate?.(80) } catch { /* fine */ }
     // Typing arrives async from the cached PokeAPI proxy; the pills pop in
@@ -53,7 +62,31 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
         .then((p) => setToasts((t) => t.map((x) => (x.id === toast.id ? { ...x, types: p.types } : x))))
         .catch(() => {})
     }
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000)
+    // Wild toasts linger longer so the false-detection button is reachable
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), opts.trainer ? 8000 : 12000)
+  }
+
+  // "That wasn't a real encounter": remove the mislogged entry AND auto-file
+  // a bug report with diagnostics — all inline, no dialogs, so mobile
+  // fullscreen survives (prompts over fullscreen break it).
+  const falseDetection = async (t) => {
+    setToasts((x) => x.map((y) => (y.id === t.id ? { ...y, reported: 'sending' } : y)))
+    setRecent((r) => r.map((y) => (y.encId === t.encId ? { ...y, reported: true } : y)))
+    if (t.encId) {
+      try {
+        await api.del(`/api/encounters/${t.encId}`)
+        onUnlogged?.(t.encId)
+      } catch { /* may already be deleted */ }
+    }
+    try {
+      await api.post('/api/bug-report', {
+        description: `AUTO (false-detection button): radar logged "${monLabel(t.mon, t.name)}" Lv.${t.mon.level} as a wild encounter at "${t.area || 'unknown area'}" but the runner flagged it as false. personality=${t.mon.personality} otId=${t.mon.otId >>> 0} species=${t.mon.internalSpecies} masked=${t.mon.maskedSpecies} playerTrainerId=${trainerId ?? 'unknown'}`,
+        diagnostics: collectDiagnostics()
+      })
+      setToasts((x) => x.map((y) => (y.id === t.id ? { ...y, reported: 'done' } : y)))
+    } catch {
+      setToasts((x) => x.map((y) => (y.id === t.id ? { ...y, reported: 'failed' } : y)))
+    }
   }
 
   // Attach the best available species name/national id to a detected mon.
@@ -74,8 +107,9 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
   }
 
   // Fully automatic: every detection is logged immediately (status "missed",
-  // no location) and annotated later in the Encounters panel. Catches flip to
-  // "caught" automatically when the mon appears in the synced party.
+  // location pre-filled from the live map read) and annotated later in the
+  // Encounters panel. Catches flip to "caught" automatically when the mon
+  // appears in the synced party.
   const autoLog = async (mon) => {
     const name = mon._name || (mon.nationalId && idToName[mon.nationalId]) || ''
     let chainId = null
@@ -84,7 +118,7 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
     }
     try {
       const enc = await api.post(`/api/runs/${run.id}/encounters`, {
-        location: '',
+        location: areaRef.current || '',
         speciesName: name || `#${mon.maskedSpecies ?? mon.internalSpecies}`,
         speciesId: mon.nationalId ?? null,
         chainId,
@@ -95,18 +129,31 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
         personality: mon.personality
       })
       onLogged(enc)
-      setRecent((r) => [{ mon, name }, ...r].slice(0, 6))
-      if (window.__nuzMobileFs) addToast(mon, name)
+      setRecent((r) => [{ mon, name, encId: enc.id, area: areaRef.current }, ...r].slice(0, 6))
+      if (window.__nuzMobileFs) addToast(mon, name, { encId: enc.id, area: areaRef.current })
     } catch { /* server hiccup — radar keeps running */ }
   }
 
-  // Trainer battle: acknowledged, never logged. Wild mons carry the PLAYER's
-  // trainer id as their OT (validated against a real heap dump); anything
-  // else in the enemy slot belongs to a trainer.
-  const noteTrainerBattle = (mon) => {
+  // Trainer battle: never logged as an encounter (wild mons carry the
+  // PLAYER's trainer id as their OT; anything else belongs to a trainer) —
+  // but it IS tracked in the separate trainers list, grouped by OT id.
+  const noteTrainerBattle = async (mon) => {
     const name = mon._name || (mon.nationalId && idToName[mon.nationalId]) || ''
-    setRecent((r) => [{ mon, name, trainer: true }, ...r].slice(0, 6))
-    if (window.__nuzMobileFs) addToast(mon, name, true)
+    setRecent((r) => [{ mon, name, trainer: true, area: areaRef.current }, ...r].slice(0, 6))
+    if (window.__nuzMobileFs) addToast(mon, name, { trainer: true, area: areaRef.current })
+    try {
+      const entry = await api.post(`/api/runs/${run.id}/trainers`, {
+        otId: mon.otId >>> 0,
+        location: areaRef.current || '',
+        mon: {
+          speciesName: name || `#${mon.maskedSpecies ?? mon.internalSpecies}`,
+          speciesId: mon.nationalId ?? null,
+          level: mon.level,
+          personality: mon.personality
+        }
+      })
+      onTrainerLogged?.(entry)
+    } catch { /* server hiccup — tracking resumes next battle */ }
   }
 
   const stoppedByUserRef = useRef(false)
@@ -134,9 +181,16 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
       primedRef.current = false // first scan swallows stale pre-existing enemies
       setScanCount(0)
       try { tableRef.current = findSpeciesTable() } catch { tableRef.current = null }
+      // Locate SaveBlock1 among the party copies — its warp-location bytes
+      // give us the live current area (anchored by the sav layout, not
+      // hardcoded addresses).
+      try {
+        const si = savInfoRef.current
+        sb1Ref.current = locateSaveBlock1(found, si?.partyMonsOffset, si?.location)
+      } catch { sb1Ref.current = null }
       setWatching(true)
       setError('')
-      setStatus(`Calibrated (${totalHits} party hit${totalHits === 1 ? '' : 's'}) — watching ${found.length} location${found.length === 1 ? '' : 's'}.${tableRef.current ? ` Species names read from the game's own table (stride ${tableRef.current.stride}).` : ''}`)
+      setStatus(`Calibrated (${totalHits} party hit${totalHits === 1 ? '' : 's'}) — watching ${found.length} location${found.length === 1 ? '' : 's'}.${tableRef.current ? ` Species names read from the game's own table (stride ${tableRef.current.stride}).` : ''}${sb1Ref.current != null ? ' Live map tracking on.' : ' Live map not located (encounter locations stay blank).'}`)
       return true
     } catch (err) {
       if (!silent) setError(err.message)
@@ -171,6 +225,18 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
     if (!watching) return
     const tick = () => {
       try {
+        // Live location first, so a detection in the same tick gets the area
+        if (sb1Ref.current != null) {
+          try {
+            const loc = readLocation(sb1Ref.current)
+            const name = loc ? areaLabel(loc.mapGroup, loc.mapNum) : ''
+            if (name !== areaRef.current) {
+              areaRef.current = name
+              setArea(name)
+              onArea?.(name)
+            }
+          } catch { /* heap unavailable this tick */ }
+        }
         const enemies = scanEnemies(candidates, (pid) => seenRef.current.has(pid), [600, -600, ...extraDeltas])
         for (const raw of enemies) {
           seenRef.current.add(raw.personality)
@@ -263,9 +329,12 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
                   {t.trainer ? 'Trainer battle · ' : 'Wild '}<strong>{monLabel(t.mon, t.name)}</strong> · Lv. {t.mon.level}
                   {t.mon.shiny && <span className="shiny-star"> ✦</span>}
                   {t.trainer
-                    ? <span className="ft-skipped"> — not an encounter</span>
-                    : <span className="ft-logged"> — logged ✓</span>}
+                    ? <span className="ft-skipped"> — tracked, not an encounter</span>
+                    : t.reported
+                      ? <span className="ft-skipped"> — {t.reported === 'sending' ? 'reporting…' : t.reported === 'failed' ? 'removed (report failed)' : 'removed & reported ✓'}</span>
+                      : <span className="ft-logged"> — logged ✓</span>}
                 </div>
+                {t.area && <div className="ft-area">📍 {t.area}</div>}
                 {t.types && (
                   <div className="ft-types">
                     {t.types.map((ty) => (
@@ -276,6 +345,9 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
                   </div>
                 )}
               </div>
+              {!t.trainer && !t.reported && (
+                <button className="small ft-false" title="False detection: remove from tracker and auto-file a bug report" onClick={() => falseDetection(t)}>✕ false?</button>
+              )}
               <button className="small" onClick={() => setToasts((x) => x.filter((y) => y !== t))}>✕</button>
             </div>
           ))}
@@ -308,16 +380,23 @@ export default function EncounterRadar({ run, encounters, party, trainerId, onLo
               <span>
                 <strong>{monLabel(r.mon, r.name)}</strong> · Lv. {r.mon.level}
                 {r.mon.shiny && <span className="shiny-star"> ✦</span>}
+                {r.area && <span className="rr-note"> · 📍 {r.area}</span>}
               </span>
-              <span className="rr-note">{r.trainer ? 'trainer battle — ignored' : 'logged — annotate in Encounters'}</span>
+              <span className="rr-note">
+                {r.trainer ? 'trainer battle — tracked separately' : r.reported ? 'removed & reported' : 'logged — annotate in Encounters'}
+              </span>
+              {!r.trainer && !r.reported && r.encId && (
+                <button className="small" title="False detection: remove from tracker and auto-file a bug report" onClick={() => falseDetection({ ...r, id: `rr-${r.encId}` })}>✕ false?</button>
+              )}
             </div>
           ))}
         </div>
       )}
       {watching && status && (
         <p className="map-tip">
-          {status} Scans: {scanCount}. Wild battles auto-log; trainer battles are recognized (by OT id) and ignored.
-          Catches flip to ● Caught automatically when the Pokemon joins your synced party.
+          {status} Scans: {scanCount}. Wild battles auto-log with the current area; trainer battles are recognized
+          (by OT id) and tracked in the separate Trainers list. Catches flip to ● Caught automatically when the
+          Pokemon joins your synced party.
         </p>
       )}
       {watching && (

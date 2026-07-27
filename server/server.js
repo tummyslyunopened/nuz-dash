@@ -16,6 +16,8 @@ const lobbies = new Store('lobbies', { lobbies: [] })
 const members = new Store('members', { members: [] })
 const runs = new Store('runs', { runs: [] }) // a "run" is one attempt by one member
 const encounters = new Store('encounters', { encounters: [] })
+// Trainer battles, grouped: one record per (run, opposing trainer OT id)
+const trainers = new Store('trainers', { trainers: [] })
 const diary = new Store('diary', { entries: [] })
 const maps = new Store('maps', { maps: {} }) // keyed `${lobbyId}|${gameId}`
 const pokecache = new Store('pokecache', { cache: {} })
@@ -704,6 +706,74 @@ app.delete('/api/encounters/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+// ---------- Trainer battles (grouped by opposing trainer OT id) ----------
+app.get('/api/runs/:id/trainers', (req, res) => {
+  if (!findRun(req, req.params.id)) return res.status(404).json({ error: 'not found' })
+  res.json(trainers.data.trainers.filter((t) => t.runId === req.params.id))
+})
+
+// Radar upsert: same OT id = same trainer, so repeat battles and multi-mon
+// teams accumulate on one record instead of spamming the list.
+app.post('/api/runs/:id/trainers', (req, res) => {
+  const run = ownRun(req, req.params.id)
+  if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  const otId = Number(req.body.otId) >>> 0
+  if (!otId) return res.status(400).json({ error: 'otId required' })
+  const mon = req.body.mon && typeof req.body.mon === 'object' ? {
+    speciesName: String(req.body.mon.speciesName || '').slice(0, 40),
+    speciesId: req.body.mon.speciesId ?? null,
+    level: Number(req.body.mon.level) || 0,
+    personality: Number(req.body.mon.personality) || 0
+  } : null
+  let entry = trainers.data.trainers.find((t) => t.runId === run.id && t.otId === otId)
+  if (!entry) {
+    entry = {
+      id: crypto.randomUUID(),
+      runId: run.id,
+      otId,
+      name: '',
+      location: String(req.body.location || '').slice(0, 60),
+      status: 'seen', // seen | beaten
+      notes: '',
+      mons: [],
+      firstSeenAt: now(),
+      updatedAt: now()
+    }
+    trainers.data.trainers.push(entry)
+  }
+  if (mon && mon.personality && !entry.mons.some((m) => m.personality === mon.personality)) {
+    entry.mons.push(mon)
+  }
+  if (!entry.location && req.body.location) entry.location = String(req.body.location).slice(0, 60)
+  entry.updatedAt = now()
+  trainers.save()
+  res.json(entry)
+})
+
+app.put('/api/trainers/:id', (req, res) => {
+  const entry = trainers.data.trainers.find((t) => t.id === req.params.id)
+  const run = entry && ownRun(req, entry.runId)
+  if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  for (const key of ['name', 'location', 'notes']) {
+    if (req.body[key] !== undefined) entry[key] = String(req.body[key]).slice(0, key === 'notes' ? 500 : 60)
+  }
+  if (req.body.status !== undefined && ['seen', 'beaten'].includes(req.body.status)) {
+    entry.status = req.body.status
+  }
+  entry.updatedAt = now()
+  trainers.save()
+  res.json(entry)
+})
+
+app.delete('/api/trainers/:id', (req, res) => {
+  const entry = trainers.data.trainers.find((t) => t.id === req.params.id)
+  const run = entry && ownRun(req, entry.runId)
+  if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  trainers.data.trainers = trainers.data.trainers.filter((t) => t.id !== entry.id)
+  trainers.save()
+  res.json({ ok: true })
+})
+
 // ---------- Diary ----------
 app.get('/api/runs/:id/diary', (req, res) => {
   if (!findRun(req, req.params.id)) return res.status(404).json({ error: 'not found' })
@@ -1242,6 +1312,7 @@ function deleteRunData(runId) {
   try { fs.unlinkSync(path.join(statesDir, `${runId}-battery.sav`)) } catch { /* none */ }
   encounters.data.encounters = encounters.data.encounters.filter((e) => e.runId !== runId)
   diary.data.entries = diary.data.entries.filter((d) => d.runId !== runId)
+  trainers.data.trainers = trainers.data.trainers.filter((t) => t.runId !== runId)
 }
 
 function deleteMemberCascade(memberId) {
@@ -1266,7 +1337,7 @@ function deleteLobbyCascade(lobbyId) {
   return true
 }
 
-const saveAll = () => { lobbies.save(); members.save(); runs.save(); encounters.save(); diary.save(); maps.save() }
+const saveAll = () => { lobbies.save(); members.save(); runs.save(); encounters.save(); diary.save(); maps.save(); trainers.save() }
 
 adminApp.get('/api/settings', (req, res) => {
   res.json({

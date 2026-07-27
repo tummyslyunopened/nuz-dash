@@ -72,6 +72,13 @@ failure paths asserted:
   fingerprint and deletes the file, upload/download gating both scopes,
   fingerprint registration (manager-only, id preserved), run serialization
   carries sha256/hosted, disable restores uploads keeping the entry id
+- Trainer tracking: upsert grouping by OT id (same trainer appends mons,
+  personality-deduped; new OT = new record), annotation (name/status/notes,
+  invalid status rejected), owner-only writes vs lobby-wide reads, delete,
+  missing-otId validation
+- Live location: locateSaveBlock1In + readLocationIn on synthetic heaps
+  (unit tests) AND on all four real heap dumps (consistent SaveBlock1
+  address, Route 101 — matches that session); map-name table unit-tested
 - Static/serving: SPA fallback exclusions (emulator files 404 properly),
   sprite proxy, anonymous release downloads, full onboarding flow (site →
   zip → install → build → boot) once per major site change
@@ -116,6 +123,13 @@ pokeemerald-expansion Emerald hack:
   reloads) is API-backed but has not been exercised in a real browser yet.
 - **Streamer decoy URLs + join interstitial**: bundle builds and route
   logic reviewed; not yet click-tested end-to-end in a browser.
+- **Live-location UI + false-detection button + trainers panel**: server
+  and parsing layers are unit/dump/API-tested; the in-browser experience
+  (📍 chip updating as you walk, toast button in mobile fullscreen,
+  trainers panel filling during play) awaits real-play verification.
+- **Group-24 dungeon map names**: best-effort vanilla ordering — floor
+  ranges past Abandoned Ship are lower-confidence; wrong names are
+  inline-editable and fall back to "Area g.n".
 
 ## Feedback loops
 
