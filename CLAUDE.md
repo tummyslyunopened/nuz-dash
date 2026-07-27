@@ -59,8 +59,9 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   PUT /api/trainers/:id. Reads lobby-wide, writes owner-only.
 - `maps.json`: keyed `` `${lobbyId}|${gameId}` `` (image + pins + nodes).
 - `settings.json`: { autoTunnel, tunnelMode quick|named, tunnelName,
-  tunnelHostname, localStateDownloads, romCleanMode, adminTotp { secret base32,
-  requireLocal, lastCounter } }. adminTotp powers admin 2FA (RFC 6238, no deps, qrcode pkg
+  tunnelHostname, localStateDownloads, romCleanMode, optionalStreaming (default
+  OFF = everyone always streams; when on, EmulatorPanel shows the stream
+  toggle), adminTotp { secret base32, requireLocal, lastCounter } }. adminTotp powers admin 2FA (RFC 6238, no deps, qrcode pkg
   for enrollment QR): cloud /admin ALWAYS requires it and forces enrollment on
   first login; localhost enforcement is the requireLocal toggle. Session =
   HttpOnly cookie (in-memory Map, 12h). Brute force: GLOBAL fail counter, 5
@@ -94,10 +95,46 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
   historical sav / fresh boot); post-start "Load a save" writes a chosen sav
   into the emulator FS and calls gameManager.restart() → title screen —
   the recovery path when boot restore fails (stale browser state).
-- Live streams: in-memory Map only (memberId → jpeg frame), never persisted.
+- Live streams: in-memory Map only (memberId → { jpeg frame, meta }), never
+  persisted. Broadcast (~15fps, 66ms tick, in-flight guard self-throttles to
+  upload RTT): EmulatorPanel crops the canvas to its content bbox
+  (downsampled non-black scan every ~2s — kills mobile letterbox/keypad dead
+  space), scales to ≤480px wide, attaches X-Stream-Meta (area + party from
+  window.__nuzStreamMeta, set by RunPage). CRITICAL capture gotchas (each was
+  a real bug): the output canvas is resized ONLY when dimensions change
+  (assigning .width clears to transparent; an empty WebGL read then encodes
+  as a BLACK JPEG), and the black-frame probe must clearRect first + skip
+  zero-alpha pixels (stale probe pixels made transparent frames look bright).
+  Viewers use PUSH transport: GET /api/stream/:id/live holds the response
+  open and the server fans out every posted frame (4-byte LE length + JPEG;
+  slow viewers skip frames at >1MB writableLength); StreamView parses the
+  stream and paints a persistent canvas (never swap <img> src at speed — it
+  flashes black while decoding). Holding the connection (or polling the
+  legacy GET) marks the viewer as watching (10s fresh) → watcher names in
+  meta + lobby summary. Presence: requireMember stamps in-memory lastSeen
+  (30s fresh) → summary `online` flag → lobby dots. Stream diagnostics:
+  window.__nuzStreamStats / __nuzViewStats, shown in StreamDiagnostics
+  panels and attached to every bug report.
+- `chat.json`: lobby group chat { id, lobbyId, memberId, name, text, at },
+  capped at 300 msgs/lobby (GET/POST /api/lobby/chat, 3s polling, 500-char
+  messages). Deleted with the lobby.
 
 ### Client (`client/`, React + Vite, no TS)
 
+- Layout: LobbyHome is the HANGOUT — grid-areas layout: phones stack
+  watch → social (chat + event log) → side (attempts/ROM/runners); ≥901px two
+  cols; ≥1440px three cols (side | watch center-stage | social). Attempts
+  card has "Play here" (new tab) + QR play-on-phone. Runner rows show
+  presence dots, watcher names, AND the last-known party/area snapshot
+  (run.lastSnapshot — persisted server-side from stream meta, throttled to
+  ~15s/area-change, so it survives the runner going offline). Event log:
+  GET /api/lobby/events aggregates encounters + trainers from existing
+  stores at request time ({ id, type, at, runner, attempt, data } — add new
+  event types server-side + a renderer in EventLogPanel's RENDERERS map). RunPage has NO dashboard view
+  anymore — single Play layout (emulator, radar, live party, route map, type
+  lookup | encounters, trainers, watch party, backup history, diary) with a
+  Return-to-lobby button. Backup history lives on RunPage
+  (BackupHistoryPanel), NOT the lobby.
 - Routes: `/` Landing, `/join/:invite`; `/m/:token(/run/:id|/view/:memberId)`
   are ENTRY-ONLY — TokenEntry mints a decoy sid (localStorage `nuz-sids`,
   in-memory overlay for private mode) and replace-redirects to the real UI

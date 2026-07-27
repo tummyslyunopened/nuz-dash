@@ -36,7 +36,7 @@ export default function WatchPartyPanel() {
         <div className="watch-grid">
           {live.map((s) => (
             <Link key={s.member.id} to={`/s/${sid}/view/${s.member.id}`} className="watch-tile" title={`Watch ${s.member.name}`}>
-              <StreamView memberId={s.member.id} interval={1000} />
+              <StreamView memberId={s.member.id} interval={500} showMeta />
               <div className="wt-label">
                 <strong>{s.member.name}</strong>
                 {s.active && (

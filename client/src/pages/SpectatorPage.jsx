@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, spriteUrl, titleCase, STATUS_META, encounterState } from '../api.js'
 import StreamView from '../components/StreamView.jsx'
+import StreamDiagnostics from '../components/StreamDiagnostics.jsx'
 
 export default function SpectatorPage() {
   const { sid, memberId } = useParams()
@@ -59,7 +60,9 @@ export default function SpectatorPage() {
         <div className="dash-col">
           <div className="panel">
             <h2>Live game</h2>
-            <StreamView memberId={memberId} interval={500} />
+            <StreamView memberId={memberId} interval={250} showMeta />
+            <p className="map-tip">Party and location update live from the runner's game — the tracker below refreshes every 15s.</p>
+            <StreamDiagnostics source="view" memberId={memberId} />
           </div>
           <div className="panel">
             <h2>

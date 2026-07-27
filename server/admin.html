@@ -112,6 +112,11 @@ async function loadSrvSettings() {
       "allow multiple downloads" priming flow). Off by default — the server pair and history are the backups.</label>
     </div>
     <div class="meta" style="margin-top:8px">
+      <label><input type="checkbox" ${s.optionalStreaming ? 'checked' : ''} onchange="toggleOptionalStreaming(this.checked)">
+      <b>Optional streaming</b> — let runners turn their game stream off. Off by default: everyone
+      always streams to the watch party (it is part of the draw of the app).</label>
+    </div>
+    <div class="meta" style="margin-top:8px">
       <label><input type="checkbox" ${s.romCleanMode ? 'checked' : ''} onchange="toggleRomClean(this.checked)">
       <b>BYO ROM (ROM-clean mode)</b> — the default: no ROM files ever touch this server. Runners supply
       their own ROM in their browser; the server stores only a SHA-256 fingerprint to verify everyone
@@ -240,6 +245,11 @@ async function totpDisable() {
 async function toggleLocalDownloads(enabled) {
   await call('POST', 'api/settings', { localStateDownloads: enabled })
   toast(enabled ? 'Local downloads enabled — players pick it up within a session reload' : 'Local downloads disabled')
+}
+
+async function toggleOptionalStreaming(enabled) {
+  await call('POST', 'api/settings', { optionalStreaming: enabled })
+  toast(enabled ? 'Runners can now turn their stream off' : 'Streaming is always on for everyone')
 }
 
 async function toggleRomClean(enabled) {

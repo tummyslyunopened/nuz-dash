@@ -1,7 +1,56 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { LayoutDashboard, Gamepad2 } from 'lucide-react'
-import { api } from '../api.js'
+import { ArrowLeft, HelpCircle } from 'lucide-react'
+import { api, memberToken } from '../api.js'
+import Tour from '../components/Tour.jsx'
+import BackupHistoryPanel from '../components/BackupHistoryPanel.jsx'
+
+const PLAY_TOUR_STEPS = [
+  {
+    title: 'Your play screen 🎮',
+    body: 'Everything lives here now: the game, the trackers that watch it, and your lobby-mates\' streams. Quick lap around the room?'
+  },
+  {
+    selector: '[data-tour="game"]',
+    title: 'The game',
+    body: 'Pick which save to boot (latest is the default — every in-game save is archived automatically) and hit Start. On phones the game goes fullscreen; the "Play on phone" button up top hops the run to your phone via QR.'
+  },
+  {
+    selector: '[data-tour="radar"]',
+    title: 'Encounter radar',
+    body: 'Every wild battle is detected from the game\'s memory and logged automatically with its route — no clicks. Trainer battles are recognized and kept separate. If a detection is ever wrong, hit "✕ false?" right on the notification.'
+  },
+  {
+    selector: '[data-tour="party"]',
+    title: 'Live party',
+    body: 'Your team, HP and current location, read straight from the running game. Faints prompt a one-tap "mark dead in tracker", and every in-game save updates your server backup.'
+  },
+  {
+    selector: '[data-tour="map"]',
+    title: 'Route map',
+    body: 'The lobby\'s shared map — drag locations into the shape of the region and watch encounter pins fill it in as everyone plays.'
+  },
+  {
+    selector: '[data-tour="encounters"]',
+    title: 'Encounters',
+    body: 'The Nuzlocke ledger. Auto-logged encounters land here with their route pre-filled — annotate status and nicknames inline. Catches flip to ● Caught by themselves when the Pokemon joins your party.'
+  },
+  {
+    selector: '[data-tour="trainers"]',
+    title: 'Trainers',
+    body: 'Every trainer you battle, grouped by trainer — their Pokemon, where you fought, and a Beaten toggle. Name them as you figure out who\'s who.'
+  },
+  {
+    selector: '[data-tour="watchparty"]',
+    title: 'Watch while you play',
+    body: 'Your lobby-mates\' live games, right next to yours. Tap a tile to spectate their full run.'
+  },
+  {
+    selector: '[data-tour="backup"]',
+    title: 'Backup history',
+    body: 'Timestamped save backups pile up here automatically. Download any of them, or boot from one using the save picker above the Start button — your safety net lives next to the game it protects.'
+  }
+]
 import EncountersPanel from '../components/EncountersPanel.jsx'
 import MapPanel from '../components/MapPanel.jsx'
 import TypeLookup from '../components/TypeLookup.jsx'
@@ -20,13 +69,28 @@ export default function RunPage() {
   const [locations, setLocations] = useState([])
   const [map, setMap] = useState(null)
   const [error, setError] = useState('')
-  const [view, setView] = useState('play') // play (default) | dash
   const [prefill, setPrefill] = useState(null)
   const [lastParty, setLastParty] = useState([])
   const [trainerId, setTrainerId] = useState(null)
   const [savInfo, setSavInfo] = useState(null) // sav-derived layout facts for the radar
   const [area, setArea] = useState('') // live current location from the radar
   const [trainers, setTrainers] = useState([])
+  const [tourOpen, setTourOpen] = useState(false)
+
+  // First visit to the play area: run the play tour once per member
+  useEffect(() => {
+    if (!run) return
+    try {
+      if (localStorage.getItem(`nuz-play-tour-done:${memberToken}`)) return
+    } catch { return }
+    const t = setTimeout(() => setTourOpen(true), 700)
+    return () => clearTimeout(t)
+  }, [run?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const closeTour = () => {
+    setTourOpen(false)
+    try { localStorage.setItem(`nuz-play-tour-done:${memberToken}`, '1') } catch { /* private mode */ }
+  }
 
   useEffect(() => {
     api.get(`/api/runs/${id}`).then((r) => {
@@ -37,6 +101,22 @@ export default function RunPage() {
     api.get(`/api/runs/${id}/encounters`).then(setEncounters).catch(() => {})
     api.get(`/api/runs/${id}/trainers`).then(setTrainers).catch(() => {})
   }, [id])
+
+  // Live overlay data for watch-party viewers — rides along with the stream
+  // frames (read by the broadcast loop in EmulatorPanel).
+  useEffect(() => {
+    window.__nuzStreamMeta = {
+      area: area || null,
+      party: lastParty.slice(0, 6).map((m) => ({
+        speciesId: m.nationalId ?? null,
+        level: m.level,
+        hp: m.hp,
+        maxHp: m.maxHp,
+        shiny: !!m.shiny
+      }))
+    }
+    return () => { window.__nuzStreamMeta = null }
+  }, [area, lastParty])
 
   if (error) {
     return (
@@ -94,6 +174,7 @@ export default function RunPage() {
 
   return (
     <div className="app-shell">
+      {tourOpen && <Tour steps={PLAY_TOUR_STEPS} onClose={closeTour} />}
       <div className="run-header">
         <div className="run-title">
           <h1>
@@ -104,11 +185,13 @@ export default function RunPage() {
             <Link to={`/s/${sid}`} style={{ color: 'var(--muted)' }}>← lobby</Link> · {run.gameName} · started {new Date(run.createdAt).toLocaleDateString()}
           </div>
         </div>
-        <div className="view-toggle">
-          <button className={view === 'dash' ? 'active' : ''} onClick={() => setView('dash')}><LayoutDashboard size={13} /> Dashboard</button>
-          <button className={view === 'play' ? 'active' : ''} onClick={() => setView('play')}><Gamepad2 size={13} /> Play</button>
-        </div>
+        <Link to={`/s/${sid}`}>
+          <button className="primary"><ArrowLeft size={13} /> Return to lobby</button>
+        </Link>
         <QrLaunchButton runId={run.id} />
+        <button className="chip" onClick={() => setTourOpen(true)} title="Replay the play-screen walkthrough">
+          <HelpCircle size={13} /> Tour
+        </button>
         <div className="stat-tiles">
           <div className="stat-tile">
             <div className="value">
@@ -169,41 +252,39 @@ export default function RunPage() {
 
       <div className="dash-grid">
         <div className="dash-col">
-          {/* The emulator must stay mounted once started, so views hide via CSS */}
-          <div className="dash-col" style={{ display: view === 'play' ? 'flex' : 'none' }}>
-            <EmulatorPanel run={run} setRun={setRun} />
-            <EncounterRadar
-              run={run}
-              encounters={encounters}
-              party={lastParty}
-              trainerId={trainerId}
-              savInfo={savInfo}
-              onLogged={(enc) => setEncounters((es) => [...es, enc])}
-              onUnlogged={(encId) => setEncounters((es) => es.filter((e) => e.id !== encId))}
-              onArea={setArea}
-              onTrainerLogged={(t) => setTrainers((ts) => (ts.some((x) => x.id === t.id) ? ts.map((x) => (x.id === t.id ? t : x)) : [...ts, t]))}
-            />
-            <LivePartyPanel
-              run={run}
-              encounters={encounters}
-              area={area}
-              onMarkDead={markEncounterDead}
-              onImport={importFromGame}
-              onParty={(party, tid, parsed) => { setLastParty(party); if (tid != null) setTrainerId(tid); if (parsed) setSavInfo(parsed) }}
-              onAutoCaught={autoCaught}
-            />
+          <div data-tour="game"><EmulatorPanel run={run} setRun={setRun} /></div>
+          <div data-tour="radar">
+          <EncounterRadar
+            run={run}
+            encounters={encounters}
+            party={lastParty}
+            trainerId={trainerId}
+            savInfo={savInfo}
+            onLogged={(enc) => setEncounters((es) => [...es, enc])}
+            onUnlogged={(encId) => setEncounters((es) => es.filter((e) => e.id !== encId))}
+            onArea={setArea}
+            onTrainerLogged={(t) => setTrainers((ts) => (ts.some((x) => x.id === t.id) ? ts.map((x) => (x.id === t.id ? t : x)) : [...ts, t]))}
+          />
           </div>
-          <div className="dash-col" style={{ display: view === 'dash' ? 'flex' : 'none' }}>
-            <MapPanel run={run} encounters={encounters} locations={locations} map={map} setMap={setMap} />
-            <TypeLookup />
+          <div data-tour="party">
+          <LivePartyPanel
+            run={run}
+            encounters={encounters}
+            area={area}
+            onMarkDead={markEncounterDead}
+            onImport={importFromGame}
+            onParty={(party, tid, parsed) => { setLastParty(party); if (tid != null) setTrainerId(tid); if (parsed) setSavInfo(parsed) }}
+            onAutoCaught={autoCaught}
+          />
           </div>
+          <div data-tour="map"><MapPanel run={run} encounters={encounters} locations={locations} map={map} setMap={setMap} /></div>
+          <TypeLookup />
         </div>
         <div className="dash-col">
-          <EncountersPanel run={run} encounters={encounters} setEncounters={setEncounters} locations={locations} prefill={prefill} />
-          <TrainersPanel run={run} trainers={trainers} setTrainers={setTrainers} />
-          <div style={{ display: view === 'play' ? 'block' : 'none' }}>
-            <WatchPartyPanel />
-          </div>
+          <div data-tour="encounters"><EncountersPanel run={run} encounters={encounters} setEncounters={setEncounters} locations={locations} prefill={prefill} /></div>
+          <div data-tour="trainers"><TrainersPanel run={run} trainers={trainers} setTrainers={setTrainers} /></div>
+          <div data-tour="watchparty"><WatchPartyPanel /></div>
+          <div data-tour="backup"><BackupHistoryPanel /></div>
           <DiaryPanel run={run} locations={locations} />
         </div>
       </div>

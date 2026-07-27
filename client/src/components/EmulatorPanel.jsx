@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Gamepad2, Radio, Play, Upload, Maximize, X } from 'lucide-react'
 import { authHeaders, memberToken, sessionHeaders } from '../api.js'
 import { sha256Hex, cacheRom, cachedRom } from '../romcache.js'
+import StreamDiagnostics from './StreamDiagnostics.jsx'
 
 // "Mobile" = touch device with a small screen (a touch laptop shouldn't count)
 const isMobile = () => window.matchMedia('(pointer: coarse) and (max-width: 900px)').matches
@@ -64,6 +65,9 @@ export default function EmulatorPanel({ run, setRun }) {
   // Replacing the ROM swaps the SHARED lobby game — ROM managers only
   const [canManageRom, setCanManageRom] = useState(false)
   const [cleanMode, setCleanMode] = useState(false)
+  // Streaming is ALWAYS ON unless the host enabled optional streaming —
+  // the watch party is part of the draw of the app
+  const [optionalStreaming, setOptionalStreaming] = useState(false)
   // ROM-clean mode: the ROM comes from the runner's own machine and only
   // ever exists in this browser. { bytes, name, sha256, match }
   const [localRom, setLocalRom] = useState(null)
@@ -79,7 +83,12 @@ export default function EmulatorPanel({ run, setRun }) {
   useEffect(() => {
     fetch('/api/me', { headers: authHeaders() })
       .then((r) => r.json())
-      .then((d) => { setCanManageRom(!!d.member?.romManager); setCleanMode(!!d.romCleanMode) })
+      .then((d) => {
+        setCanManageRom(!!d.member?.romManager)
+        setCleanMode(!!d.romCleanMode)
+        setOptionalStreaming(!!d.optionalStreaming)
+        if (!d.optionalStreaming) setStreaming(true)
+      })
       .catch(() => {})
   }, [])
 
@@ -283,35 +292,163 @@ export default function EmulatorPanel({ run, setRun }) {
     return () => clearInterval(t)
   }, [started, sessionLost, run.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Watch-party broadcast: copy the emulator canvas to JPEG (~2fps) and push
-  // the latest frame to the server for lobby-mates to watch. drawImage runs
-  // inside requestAnimationFrame so the WebGL buffer is still valid.
+  // Watch-party broadcast (~15fps): crop the emulator canvas to its actual
+  // game content — mobile portrait/fullscreen leaves big black regions
+  // (letterboxing, virtual keypad area) that would waste every viewer's
+  // screen — then scale to a normalized width so all lobby streams look the
+  // same. Live party + current area ride along in a header for viewer
+  // overlays. drawImage runs inside requestAnimationFrame so the WebGL
+  // buffer is still valid.
   useEffect(() => {
     if (!started || !streaming) return
-    const off = document.createElement('canvas')
+    const out = document.createElement('canvas')
+    const detect = document.createElement('canvas')
+    const blackProbe = document.createElement('canvas')
+    blackProbe.width = 16
+    blackProbe.height = 12
     let inFlight = false
+    let bbox = null // content bounding box in source pixels
+    let sinceDetect = 999
+    // Broadcast diagnostics — shown in the Stream diagnostics panel and
+    // attached to every bug report, so black-frame hunts have real data.
+    const stats = {
+      startedAt: Date.now(),
+      captured: 0,
+      sent: 0,
+      sendFail: 0,
+      droppedBlack: 0,
+      blobNull: 0,
+      noSrc: 0,
+      bboxChanges: 0,
+      bbox: null,
+      srcSize: null,
+      lums: [], // max-luminance (0..765) of recent captured frames
+      detectLog: [] // bbox re-detections with timestamps
+    }
+    window.__nuzStreamStats = stats
+    // Max pixel luminance of a frame (0 = pure black). Reading a WebGL
+    // canvas can race the emulator's render and return a cleared buffer —
+    // frames at/below the threshold are DROPPED, viewers hold the last
+    // good frame.
+    const frameLum = (canvas) => {
+      try {
+        const ctx = blackProbe.getContext('2d', { willReadFrequently: true })
+        // MUST clear first: a TRANSPARENT frame (empty WebGL read) draws
+        // nothing, and stale probe pixels would read as a bright frame —
+        // while toBlob encodes the same transparent canvas as pure black.
+        // (That mismatch was the black-flicker bug.)
+        ctx.clearRect(0, 0, 16, 12)
+        ctx.drawImage(canvas, 0, 0, 16, 12)
+        const px = ctx.getImageData(0, 0, 16, 12).data
+        let max = 0
+        for (let i = 0; i < px.length; i += 4) {
+          if (px[i + 3] === 0) continue // transparent = nothing rendered
+          const v = px[i] + px[i + 1] + px[i + 2]
+          if (v > max) max = v
+        }
+        return max
+      } catch {
+        return -1 // probe failed (tainted canvas etc.) — don't drop
+      }
+    }
+    const findContent = (src) => {
+      const dw = 80
+      const dh = Math.max(1, Math.round((src.height / src.width) * dw))
+      detect.width = dw
+      detect.height = dh
+      const dctx = detect.getContext('2d', { willReadFrequently: true })
+      dctx.drawImage(src, 0, 0, dw, dh)
+      const px = dctx.getImageData(0, 0, dw, dh).data
+      let minX = dw, minY = dh, maxX = -1, maxY = -1
+      for (let y = 0; y < dh; y++) {
+        for (let x = 0; x < dw; x++) {
+          const i = (y * dw + x) * 4
+          if (px[i] + px[i + 1] + px[i + 2] > 48) {
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+          }
+        }
+      }
+      if (maxX < 0) return null
+      const bw = maxX - minX + 1
+      const bh = maxY - minY + 1
+      // Fades/battle transitions go near-black — keep the previous crop then
+      if (bw * bh < dw * dh * 0.08) return null
+      const sx = src.width / dw
+      const sy = src.height / dh
+      return {
+        x: Math.max(0, Math.floor(minX * sx)),
+        y: Math.max(0, Math.floor(minY * sy)),
+        w: Math.min(src.width, Math.ceil(bw * sx)),
+        h: Math.min(src.height, Math.ceil(bh * sy))
+      }
+    }
     const tick = () => {
       if (inFlight) return
       requestAnimationFrame(() => {
         try {
           const src = window.EJS_emulator?.canvas || document.querySelector('#ejs-mount canvas')
-          if (!src || !src.width) return
-          off.width = src.width
-          off.height = src.height
-          off.getContext('2d').drawImage(src, 0, 0)
-          off.toBlob((blob) => {
-            if (!blob || !blob.size) return
+          if (!src || !src.width) { stats.noSrc += 1; return }
+          stats.captured += 1
+          stats.srcSize = `${src.width}x${src.height}`
+          sinceDetect += 1
+          if (sinceDetect >= 12) { // re-detect the content box ~every 2s
+            const b = findContent(src)
+            if (b) {
+              const changed = !bbox || b.x !== bbox.x || b.y !== bbox.y || b.w !== bbox.w || b.h !== bbox.h
+              if (changed) {
+                stats.bboxChanges += 1
+                stats.detectLog.push({ t: new Date().toISOString().slice(11, 23), box: `${b.x},${b.y} ${b.w}x${b.h}` })
+                if (stats.detectLog.length > 20) stats.detectLog.shift()
+              }
+              bbox = b
+            }
+            sinceDetect = 0
+          }
+          const box = bbox || { x: 0, y: 0, w: src.width, h: src.height }
+          const scale = Math.min(1, 480 / box.w)
+          const ow = Math.max(1, Math.round(box.w * scale))
+          const oh = Math.max(1, Math.round(box.h * scale))
+          // Resize ONLY when needed — assigning width clears the canvas to
+          // transparent, and an empty WebGL read would then encode as black.
+          // Keeping the previous frame means a raced read just re-sends the
+          // last good image instead.
+          if (out.width !== ow || out.height !== oh) {
+            out.width = ow
+            out.height = oh
+          }
+          out.getContext('2d').drawImage(src, box.x, box.y, box.w, box.h, 0, 0, ow, oh)
+          stats.bbox = `${box.x},${box.y} ${box.w}x${box.h}`
+          const lum = frameLum(out)
+          stats.lums.push(lum)
+          if (stats.lums.length > 80) stats.lums.shift()
+          if (lum >= 0 && lum <= 45) { stats.droppedBlack += 1; return } // stale WebGL read or mid-fade
+          out.toBlob((blob) => {
+            if (!blob || !blob.size) { stats.blobNull += 1; return }
             inFlight = true
+            // Set by RunPage from the live party sync + radar location
+            let metaHdr = null
+            try { metaHdr = window.__nuzStreamMeta ? encodeURIComponent(JSON.stringify(window.__nuzStreamMeta)) : null } catch { /* skip */ }
             fetch('/api/stream', {
               method: 'POST',
-              headers: { 'Content-Type': 'image/jpeg', ...authHeaders() },
+              headers: {
+                'Content-Type': 'image/jpeg',
+                ...(metaHdr ? { 'X-Stream-Meta': metaHdr } : {}),
+                ...authHeaders()
+              },
               body: blob
-            }).catch(() => {}).finally(() => { inFlight = false })
-          }, 'image/jpeg', 0.7)
+            }).then((r) => { if (r.ok) stats.sent += 1; else stats.sendFail += 1 })
+              .catch(() => { stats.sendFail += 1 })
+              .finally(() => { inFlight = false })
+          }, 'image/jpeg', 0.6)
         } catch { /* skip frame */ }
       })
     }
-    const t = setInterval(tick, 500)
+    // ~15fps target; the in-flight guard self-throttles to the actual upload
+    // round-trip, so slow links degrade to fewer fps instead of piling up.
+    const t = setInterval(tick, 66)
     return () => clearInterval(t)
   }, [started, streaming, run.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -466,13 +603,17 @@ export default function EmulatorPanel({ run, setRun }) {
                 <Maximize size={12} />
               </button>
             )}
-            {started && (
+            {started && (optionalStreaming ? (
               <button
                 className={`small ${streaming ? 'primary' : ''}`}
                 onClick={() => setStreaming((s) => !s)}
                 title="Broadcast your game to lobby-mates"
               ><Radio size={12} /> {streaming ? 'Streaming' : 'Stream off'}</button>
-            )}
+            ) : (
+              <span className="chip" title="Your game streams to the lobby's watch party — that's the fun part. (The host can make streaming optional from the admin dashboard.)">
+                <Radio size={12} /> Streaming
+              </span>
+            ))}
             <span className="chip rom-chip" title={`${run.rom.name} · ${fmtSize(run.rom.size)} · ${run.rom.core.toUpperCase()}`}>
               {run.rom.name} · {fmtSize(run.rom.size)} · {run.rom.core.toUpperCase()}
             </span>
@@ -575,6 +716,7 @@ export default function EmulatorPanel({ run, setRun }) {
             )}
           </div>
           {stateMsg && <p className="map-tip">{stateMsg}</p>}
+          {started && streaming && <StreamDiagnostics source="broadcast" />}
           {started && (
             <>
               <div className="launch-row" style={{ justifyContent: 'flex-start', marginTop: 6 }}>

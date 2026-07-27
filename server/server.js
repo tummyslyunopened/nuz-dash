@@ -18,6 +18,8 @@ const runs = new Store('runs', { runs: [] }) // a "run" is one attempt by one me
 const encounters = new Store('encounters', { encounters: [] })
 // Trainer battles, grouped: one record per (run, opposing trainer OT id)
 const trainers = new Store('trainers', { trainers: [] })
+// Lobby group chat (persisted, capped per lobby)
+const chat = new Store('chat', { messages: [] })
 const diary = new Store('diary', { entries: [] })
 const maps = new Store('maps', { maps: {} }) // keyed `${lobbyId}|${gameId}`
 const pokecache = new Store('pokecache', { cache: {} })
@@ -322,6 +324,7 @@ function requireMember(req, res, next) {
   const member = members.data.members.find((m) => m.token === t)
   if (!member) return res.status(401).json({ error: 'invalid or missing member token' })
   req.member = member
+  presence.set(member.id, Date.now())
   req.lobby = lobbies.data.lobbies.find((l) => l.id === member.lobbyId)
   if (!req.lobby) return res.status(401).json({ error: 'lobby no longer exists' })
   next()
@@ -415,6 +418,7 @@ app.get('/api/me', (req, res) => {
     publicUrl: tunnel.url, // preferred origin for shareable links
     localDownloads: !!settings.data.settings.localStateDownloads,
     romCleanMode: !!settings.data.settings.romCleanMode,
+    optionalStreaming: !!settings.data.settings.optionalStreaming,
     member: { ...publicMember(req.member), controls: req.member.controls || null },
     lobby: {
       id: req.lobby.id,
@@ -428,7 +432,25 @@ app.get('/api/me', (req, res) => {
 })
 
 // Latest emulator frame per member, memory-only (never persisted)
-const streams = new Map() // memberId -> { buf, at }
+const streams = new Map() // memberId -> { buf, at, meta } (meta: live party + area)
+// Presence (in-memory): memberId -> last authed request; drives online dots
+const presence = new Map()
+const PRESENCE_FRESH_MS = 30000
+// Who is watching whose stream: targetId -> Map(viewerId -> lastFetch)
+const streamViewers = new Map()
+const VIEWER_FRESH_MS = 10000
+const watchersOf = (targetId) => {
+  const m = streamViewers.get(targetId)
+  if (!m) return []
+  const out = []
+  for (const [viewerId, ts] of m) {
+    if (Date.now() - ts > VIEWER_FRESH_MS) { m.delete(viewerId); continue }
+    if (viewerId === targetId) continue
+    const v = members.data.members.find((x) => x.id === viewerId)
+    if (v) out.push(v.name)
+  }
+  return out
+}
 const STREAM_FRESH_MS = 8000
 
 app.get('/api/lobby/summary', (req, res) => {
@@ -441,6 +463,8 @@ app.get('/api/lobby/summary', (req, res) => {
       return {
         member: publicMember(m),
         live: !!frame && Date.now() - frame.at < STREAM_FRESH_MS,
+        online: presence.has(m.id) && Date.now() - presence.get(m.id) < PRESENCE_FRESH_MS,
+        watchers: watchersOf(m.id),
         attempts: own.length,
         active: active ? {
           runId: active.id,
@@ -450,6 +474,7 @@ app.get('/api/lobby/summary', (req, res) => {
           badges: active.badges,
           updatedAt: active.updatedAt || active.createdAt,
           rules: active.rules,
+          snapshot: active.lastSnapshot || null, // last-known party + area
           ...runStats(active)
         } : null
       }
@@ -1022,20 +1047,204 @@ app.post('/api/runs/:id/manual-state', express.raw({ type: 'application/octet-st
 })
 
 // ---------- Live game streaming (watch party) ----------
+// Push fan-out: viewers hold ONE long-lived response each; every frame the
+// runner posts is forwarded immediately (4-byte LE length prefix + JPEG).
+// Polling GET /api/stream/:id stays as the fallback path.
+const streamSubs = new Map() // targetId -> Set(res)
+const writeFrame = (res, buf) => {
+  const len = Buffer.alloc(4)
+  len.writeUInt32LE(buf.length, 0)
+  res.write(len)
+  res.write(buf)
+}
+const fanOutFrame = (targetId, buf) => {
+  const subs = streamSubs.get(targetId)
+  if (!subs) return
+  for (const res of subs) {
+    try {
+      // Slow viewer (buffer piling up): skip frames rather than lag behind
+      if (res.writableLength > 1_000_000) continue
+      writeFrame(res, buf)
+    } catch {
+      subs.delete(res)
+    }
+  }
+}
+
 app.post('/api/stream', express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '2mb' }), (req, res) => {
   if (req.body && req.body.length) {
-    streams.set(req.member.id, { buf: req.body, at: Date.now() })
+    // Live overlay data (current area + party snapshot) rides along in a
+    // header so viewers see the LIVE state, not just last-save data
+    let meta = null
+    try { meta = JSON.parse(decodeURIComponent(req.headers['x-stream-meta'] || '')) } catch { /* optional */ }
+    streams.set(req.member.id, { buf: req.body, at: Date.now(), meta })
+    fanOutFrame(req.member.id, req.body)
+    // Persist a throttled last-known snapshot on the active run, so the
+    // lobby shows everyone's latest party/location even while they're
+    // offline. Saved at most every ~15s (or on area change) — not per frame.
+    if (meta && (meta.party || meta.area)) {
+      const run = runs.data.runs.find((r) => r.memberId === req.member.id && r.status === 'active')
+      if (run) {
+        const last = run.lastSnapshot
+        const areaChanged = !last || (last.area || null) !== (meta.area || null)
+        if (!last || areaChanged || Date.now() - new Date(last.at).getTime() > 15000) {
+          run.lastSnapshot = {
+            area: meta.area || null,
+            party: Array.isArray(meta.party) ? meta.party.slice(0, 6) : [],
+            at: now()
+          }
+          runs.save()
+        }
+      }
+    }
   }
   res.json({ ok: true })
+})
+
+// Long-lived frame push: full broadcast framerate, no per-frame round-trips
+app.get('/api/stream/:memberId/live', (req, res) => {
+  const target = members.data.members.find((m) => m.id === req.params.memberId && m.lobbyId === req.lobby.id)
+  if (!target) return res.status(404).json({ error: 'no such runner' })
+  res.set({
+    'Content-Type': 'application/octet-stream',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no'
+  })
+  res.flushHeaders?.()
+  if (!streamSubs.has(target.id)) streamSubs.set(target.id, new Set())
+  const subs = streamSubs.get(target.id)
+  subs.add(res)
+  // Seed with the current frame so the picture appears instantly
+  const cur = streams.get(target.id)
+  if (cur && Date.now() - cur.at < STREAM_FRESH_MS) {
+    try { writeFrame(res, cur.buf) } catch { /* client already gone */ }
+  }
+  // Holding the connection = watching
+  const markWatcher = () => {
+    if (!streamViewers.has(target.id)) streamViewers.set(target.id, new Map())
+    streamViewers.get(target.id).set(req.member.id, Date.now())
+  }
+  markWatcher()
+  const wTimer = setInterval(markWatcher, 5000)
+  req.on('close', () => {
+    subs.delete(res)
+    clearInterval(wTimer)
+  })
 })
 
 app.get('/api/stream/:memberId', (req, res) => {
   const target = members.data.members.find((m) => m.id === req.params.memberId && m.lobbyId === req.lobby.id)
   const frame = target && streams.get(target.id)
   if (!frame || Date.now() - frame.at > 15000) return res.status(404).end()
+  // Fetching frames = watching; powers the "who's watching" indicators
+  if (!streamViewers.has(target.id)) streamViewers.set(target.id, new Map())
+  streamViewers.get(target.id).set(req.member.id, Date.now())
   res.set('Content-Type', 'image/jpeg')
   res.set('Cache-Control', 'no-store')
   res.send(frame.buf)
+})
+
+// Live overlay for a stream: area + party snapshot + who's watching
+app.get('/api/stream/:memberId/meta', (req, res) => {
+  const target = members.data.members.find((m) => m.id === req.params.memberId && m.lobbyId === req.lobby.id)
+  if (!target) return res.status(404).json({ error: 'no such runner' })
+  const frame = streams.get(target.id)
+  const live = !!frame && Date.now() - frame.at < STREAM_FRESH_MS
+  res.set('Cache-Control', 'no-store')
+  res.json({
+    live,
+    at: frame?.at || null,
+    area: (live && frame.meta?.area) || null,
+    party: (live && frame.meta?.party) || null,
+    watchers: watchersOf(target.id)
+  })
+})
+
+// ---------- Lobby group chat ----------
+const CHAT_CAP = 300 // per lobby; older messages roll off
+
+app.get('/api/lobby/chat', (req, res) => {
+  const msgs = chat.data.messages.filter((m) => m.lobbyId === req.lobby.id)
+  res.set('Cache-Control', 'no-store')
+  res.json(msgs.slice(-100))
+})
+
+app.post('/api/lobby/chat', (req, res) => {
+  const text = String(req.body.text || '').trim().slice(0, 500)
+  if (!text) return res.status(400).json({ error: 'empty message' })
+  const msg = {
+    id: crypto.randomUUID(),
+    lobbyId: req.lobby.id,
+    memberId: req.member.id,
+    name: req.member.name,
+    text,
+    at: now()
+  }
+  chat.data.messages.push(msg)
+  const mine = chat.data.messages.filter((m) => m.lobbyId === req.lobby.id)
+  if (mine.length > CHAT_CAP) {
+    const cutoff = new Set(mine.slice(0, mine.length - CHAT_CAP).map((m) => m.id))
+    chat.data.messages = chat.data.messages.filter((m) => !cutoff.has(m.id))
+  }
+  chat.save()
+  res.json(msg)
+})
+
+// ---------- Lobby event log ----------
+// Aggregate feed of tracked game events across the lobby, assembled from the
+// existing stores at request time (no separate event store to keep in sync).
+// EXTENSIBLE: each source contributes { id, type, at, runner, attempt, data }
+// — add new types (deaths, badges, clears…) by pushing more entries here as
+// more game state gets tracked.
+app.get('/api/lobby/events', (req, res) => {
+  const lobbyRuns = new Map(
+    runs.data.runs.filter((r) => r.lobbyId === req.lobby.id).map((r) => [r.id, r])
+  )
+  const nameOf = new Map(
+    members.data.members.filter((m) => m.lobbyId === req.lobby.id).map((m) => [m.id, m.name])
+  )
+  const events = []
+  for (const e of encounters.data.encounters) {
+    const run = lobbyRuns.get(e.runId)
+    if (!run) continue
+    events.push({
+      id: `enc-${e.id}`,
+      type: 'encounter',
+      at: e.createdAt,
+      runner: nameOf.get(run.memberId) || '?',
+      attempt: run.attemptNumber,
+      data: {
+        speciesName: e.speciesName,
+        speciesId: e.speciesId,
+        status: e.status,
+        alive: e.alive,
+        location: e.location,
+        level: e.level,
+        shiny: e.shiny
+      }
+    })
+  }
+  for (const t of trainers.data.trainers) {
+    const run = lobbyRuns.get(t.runId)
+    if (!run) continue
+    events.push({
+      id: `tr-${t.id}`,
+      type: 'trainer',
+      at: t.firstSeenAt,
+      runner: nameOf.get(run.memberId) || '?',
+      attempt: run.attemptNumber,
+      data: {
+        name: t.name,
+        otId: t.otId,
+        location: t.location,
+        mons: t.mons.length,
+        status: t.status
+      }
+    })
+  }
+  events.sort((a, b) => (b.at || '').localeCompare(a.at || ''))
+  res.set('Cache-Control', 'no-store')
+  res.json(events.slice(0, 60))
 })
 
 // ---------- Bug reports ----------
@@ -1333,22 +1542,27 @@ function deleteLobbyCascade(lobbyId) {
   for (const key of Object.keys(maps.data.maps)) {
     if (key.startsWith(`${lobbyId}|`)) delete maps.data.maps[key]
   }
+  chat.data.messages = chat.data.messages.filter((m) => m.lobbyId !== lobbyId)
   lobbies.data.lobbies = lobbies.data.lobbies.filter((l) => l.id !== lobbyId)
   return true
 }
 
-const saveAll = () => { lobbies.save(); members.save(); runs.save(); encounters.save(); diary.save(); maps.save(); trainers.save() }
+const saveAll = () => { lobbies.save(); members.save(); runs.save(); encounters.save(); diary.save(); maps.save(); trainers.save(); chat.save() }
 
 adminApp.get('/api/settings', (req, res) => {
   res.json({
     localStateDownloads: !!settings.data.settings.localStateDownloads,
-    romCleanMode: !!settings.data.settings.romCleanMode
+    romCleanMode: !!settings.data.settings.romCleanMode,
+    optionalStreaming: !!settings.data.settings.optionalStreaming
   })
 })
 
 adminApp.post('/api/settings', (req, res) => {
   if (typeof req.body.localStateDownloads === 'boolean') {
     settings.data.settings.localStateDownloads = req.body.localStateDownloads
+  }
+  if (typeof req.body.optionalStreaming === 'boolean') {
+    settings.data.settings.optionalStreaming = req.body.optionalStreaming
   }
   if (typeof req.body.romCleanMode === 'boolean' && req.body.romCleanMode !== !!settings.data.settings.romCleanMode) {
     if (req.body.romCleanMode) {
@@ -1373,7 +1587,8 @@ adminApp.post('/api/settings', (req, res) => {
   settings.save()
   res.json({
     localStateDownloads: !!settings.data.settings.localStateDownloads,
-    romCleanMode: !!settings.data.settings.romCleanMode
+    romCleanMode: !!settings.data.settings.romCleanMode,
+    optionalStreaming: !!settings.data.settings.optionalStreaming
   })
 })
 

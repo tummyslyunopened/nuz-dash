@@ -578,9 +578,11 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
   overflow: hidden;
   min-height: 60px;
 }
-.stream-view img { width: 100%; display: block; image-rendering: pixelated; }
+.stream-view img,
+.stream-view canvas { width: 100%; display: block; image-rendering: pixelated; }
 .stream-view.compact { width: 148px; flex: none; }
-.stream-view.compact img { width: 148px; }
+.stream-view.compact img,
+.stream-view.compact canvas { width: 148px; }
 .stream-offline {
   color: var(--muted);
   font-size: 12px;
@@ -602,6 +604,121 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 }
 .runner-card { align-items: flex-start; }
 .runner-stream { flex: none; }
+
+/* Watch-party grid: every live stream at once, normalized tiles */
+.watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.watch-cell .stream-view.compact,
+.watch-cell .stream-view.compact img,
+.watch-cell .stream-view.compact canvas { width: 100%; }
+.wc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.watchers-chip {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(22, 18, 31, 0.85);
+  color: var(--text2);
+  font-size: 10.5px;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+/* Live overlay riding on stream frames: current area + party HP */
+.stream-meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 6px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+  pointer-events: none;
+}
+.sm-area {
+  color: #fff;
+  font-size: 11px;
+  text-shadow: 0 1px 2px #000;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sm-party { display: flex; gap: 1px; flex: none; }
+.sm-mon { position: relative; width: 22px; }
+.sm-mon img { width: 22px; height: 22px; image-rendering: pixelated; display: block; }
+.sm-mon.sm-fnt img { filter: grayscale(1) brightness(0.55); }
+.sm-hp {
+  display: block;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.sm-hp > span { display: block; height: 100%; border-radius: 2px; }
+.sm-hp .hp-good { background: var(--good); }
+.sm-hp .hp-warn { background: var(--warning); }
+.sm-hp .hp-crit { background: var(--critical); }
+
+/* Presence: who's around right now */
+.presence-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.presence-dot.on { background: var(--good); border-color: var(--good); box-shadow: 0 0 6px rgba(12, 163, 12, 0.6); }
+
+/* Lobby event log */
+.event-log {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.el-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; line-height: 1.35; }
+.el-icon { flex: none; width: 26px; display: inline-flex; justify-content: center; }
+.el-icon img { width: 26px; height: 26px; image-rendering: pixelated; }
+.el-emoji { font-size: 14px; }
+.el-text { flex: 1; min-width: 0; }
+.el-when { color: var(--muted); font-size: 10.5px; flex: none; }
+
+/* Last-known runner state (party + area, shown even when offline) */
+.runner-snap { display: flex; align-items: center; gap: 3px; margin-top: 5px; flex-wrap: wrap; }
+.runner-snap .rr-note { margin-left: 5px; }
+
+/* Lobby chat */
+.chat-panel { display: flex; flex-direction: column; }
+.chat-scroll {
+  max-height: 300px;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+.chat-msg { font-size: 13px; line-height: 1.35; }
+.chat-msg .chat-who { color: var(--accent); font-weight: 650; margin-right: 6px; }
+.chat-msg.mine .chat-who { color: var(--text2); }
+.chat-msg .chat-when { color: var(--muted); font-size: 10.5px; margin-left: 6px; }
+.chat-input { display: flex; gap: 6px; margin-top: 8px; }
+.chat-input input { flex: 1; }
 
 .watch-grid {
   display: grid;
@@ -764,8 +881,34 @@ table.enc-table .mono { font-variant-numeric: tabular-nums; }
 .home-title { display: flex; align-items: baseline; gap: 12px; margin: 8px 0 18px; }
 .home-title h1 { margin: 0; font-size: 26px; }
 .home-title .sub { color: var(--muted); }
-.home-grid { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 14px; align-items: start; }
-@media (max-width: 900px) { .home-grid { grid-template-columns: 1fr; } }
+/* Lobby layout: phones stack attempts/ROM first, then watch → runners →
+   social; two columns on tablets (runners under the watch party); on wide
+   screens the watch party + runners take center stage with management left
+   and chat/events right. */
+.home-grid {
+  display: grid;
+  gap: 14px;
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "side" "watch" "runners" "social";
+}
+.hg-side { grid-area: side; }
+.hg-watch { grid-area: watch; }
+.hg-runners { grid-area: runners; }
+.hg-social { grid-area: social; }
+.hg-side, .hg-watch, .hg-runners, .hg-social { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (min-width: 901px) {
+  .home-grid {
+    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+    grid-template-areas: "side watch" "side runners" "side social";
+  }
+}
+@media (min-width: 1440px) {
+  .home-grid {
+    grid-template-columns: 360px minmax(0, 1fr) 380px;
+    grid-template-areas: "side watch social" "side runners social";
+  }
+}
 .new-run-form { display: flex; flex-direction: column; gap: 10px; }
 .new-run-form .rules { display: flex; flex-direction: column; gap: 6px; }
 .new-run-form .rules label { display: flex; gap: 8px; align-items: center; }

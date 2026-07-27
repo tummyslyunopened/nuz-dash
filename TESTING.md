@@ -79,6 +79,10 @@ failure paths asserted:
 - Live location: locateSaveBlock1In + readLocationIn on synthetic heaps
   (unit tests) AND on all four real heap dumps (consistent SaveBlock1
   address, Route 101 — matches that session); map-name table unit-tested
+- Watch party backend: chat post/read/empty-rejection, presence flags in
+  summary, stream frames with X-Stream-Meta round-tripping area+party via
+  the meta endpoint, watcher tracking (frame fetch → watcher names in both
+  stream meta and lobby summary)
 - Static/serving: SPA fallback exclusions (emulator files 404 properly),
   sprite proxy, anonymous release downloads, full onboarding flow (site →
   zip → install → build → boot) once per major site change
@@ -130,6 +134,13 @@ pokeemerald-expansion Emerald hack:
 - **Group-24 dungeon map names**: best-effort vanilla ordering — floor
   ranges past Abandoned Ship are lower-confidence; wrong names are
   inline-editable and fall back to "Area g.n".
+- **Stream crop + framerate in real play**: the content-bbox crop
+  (letterbox/keypad removal), ~6fps feel over the tunnel, and the live
+  party/area overlays need real multi-device play to verify; the crop
+  heuristic's transition-frame handling (keep previous box) is untested
+  against real fade-to-black battles.
+- **Lobby hangout UX on phones**: new layout (watch grid + chat first)
+  reviewed in code only.
 
 ## Feedback loops
 

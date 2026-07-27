@@ -6,7 +6,7 @@
 <title>Nuz-Dash — run your own multiplayer Nuzlocke server</title>
 <meta name="description" content="Nuz-Dash is a self-hosted multiplayer Pokemon Nuzlocke platform: browser emulator, automatic encounter tracking, live watch party. Create a lobby, invite friends with a link, race your runs.">
 <meta name="theme-color" content="#0c0a12">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%238b5cf6'/%3E%3Crect x='2' y='14' width='28' height='4' fill='%230c0a12'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%230c0a12'/%3E%3Ccircle cx='16' cy='16' r='3' fill='white'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='t' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23a78bfa'/%3E%3Cstop offset='1' stop-color='%237c3aed'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='16' cy='16' r='14.5' fill='%230c0a12'/%3E%3Cpath d='M2.5 16a13.5 13.5 0 0 1 27 0z' fill='url(%23t)'/%3E%3Cpath d='M2.5 16a13.5 13.5 0 0 0 27 0z' fill='%23ece7fb'/%3E%3Crect x='2.5' y='14.6' width='27' height='2.8' fill='%230c0a12'/%3E%3Ccircle cx='16' cy='16' r='5.2' fill='%230c0a12'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23ece7fb'/%3E%3Ccircle cx='16' cy='16' r='1.7' fill='%238b5cf6'/%3E%3C/svg%3E">
 <style>
   :root {
     --page:#0c0a12; --surface:#16121f; --surface2:#1f1930; --text:#f4f1fb; --text2:#c9c3dc;
@@ -26,11 +26,14 @@
   nav .brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:17px; color:var(--text); text-decoration:none }
   nav .spacer { flex:1 }
   nav a.gh { color:var(--text2); text-decoration:none; font-size:14px }
-  .ball { width:28px; height:28px; border-radius:9px; background:linear-gradient(135deg,#8b5cf6,#4c1d95); display:inline-flex; align-items:center; justify-content:center }
-  .ball svg { width:16px; height:16px }
+  .ball { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center }
+  .ball svg { width:28px; height:28px; filter:drop-shadow(0 2px 6px rgba(124,58,237,.45)) }
   .hero { text-align:center; padding:58px 0 34px }
   .hero h1 {
-    margin:0 0 14px; font-size:clamp(34px, 6vw, 56px); letter-spacing:-.02em; line-height:1.1;
+    /* line-height + padding keep descenders (the y in "your") inside the
+       background-clip:text box — a tight box renders them transparent */
+    margin:0 0 14px; font-size:clamp(34px, 6vw, 56px); letter-spacing:-.02em; line-height:1.18;
+    padding-bottom:.08em;
     background:linear-gradient(90deg,#d8ccff,#a78bfa 55%,#7c3aed);
     -webkit-background-clip:text; background-clip:text; color:transparent;
   }
@@ -76,7 +79,7 @@
 <div class="wrap">
   <nav>
     <a class="brand" href="/">
-      <span class="ball"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="#fff" opacity=".9"/><rect x="2" y="14" width="28" height="4" fill="#0c0a12"/><circle cx="16" cy="16" r="5" fill="#0c0a12"/><circle cx="16" cy="16" r="3" fill="#fff"/></svg></span>
+      <span class="ball"><svg viewBox="0 0 32 32"><defs><linearGradient id="balltop" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><circle cx="16" cy="16" r="14.5" fill="#0c0a12"/><path d="M2.5 16a13.5 13.5 0 0 1 27 0z" fill="url(#balltop)"/><path d="M2.5 16a13.5 13.5 0 0 0 27 0z" fill="#ece7fb"/><rect x="2.5" y="14.6" width="27" height="2.8" fill="#0c0a12"/><circle cx="16" cy="16" r="5.2" fill="#0c0a12"/><circle cx="16" cy="16" r="3.4" fill="#ece7fb"/><circle cx="16" cy="16" r="1.7" fill="#8b5cf6"/><ellipse cx="11" cy="8.6" rx="3.4" ry="1.9" fill="#fff" opacity=".35" transform="rotate(-24 11 8.6)"/></svg></span>
       Nuz-Dash
     </a>
     <span class="spacer"></span>

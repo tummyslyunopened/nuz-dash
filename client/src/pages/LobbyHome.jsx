@@ -1,10 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, Trophy, Gamepad2, Users, History, Download, RefreshCw, HelpCircle, ShieldCheck, ShieldOff, Crown } from 'lucide-react'
-import { api, authHeaders, rememberLink, forgetLink, memberToken, pathForToken } from '../api.js'
+import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, EyeOff, Trophy, Gamepad2, Users, HelpCircle, ShieldCheck, ShieldOff, Crown, Tv, Home } from 'lucide-react'
+import { api, authHeaders, rememberLink, forgetLink, memberToken, pathForToken, spriteUrl } from '../api.js'
 import { sha256Hex } from '../romcache.js'
 import StreamView from '../components/StreamView.jsx'
+import ChatPanel from '../components/ChatPanel.jsx'
+import EventLogPanel from '../components/EventLogPanel.jsx'
+import QrLaunchButton from '../components/QrLaunchButton.jsx'
 import Tour from '../components/Tour.jsx'
+import PokeballIcon from '../components/PokeballIcon.jsx'
 
 const TOUR_STEPS = (byoRom) => [
   {
@@ -34,14 +38,13 @@ const TOUR_STEPS = (byoRom) => [
     body: 'Start an attempt to begin your run — pick rules like dupes clause and hardcore level caps. When a run dies, restart into attempt #2: the old one and its graveyard stay in your history forever.'
   },
   {
-    selector: '[data-tour="runners"]',
+    selector: '[data-tour="watch"]',
     title: 'The watch party',
-    body: 'Everyone playing streams their game here live. Tap a runner to spectate their full run — encounters, deaths, diary and all.'
+    body: 'Everyone playing streams their game here live — all at once, with their party and current route on the tile. Hide streams you don\'t care about, tap one to spectate the full run, and trash-talk in the lobby chat below.'
   },
   {
-    selector: '[data-tour="history"]',
     title: 'Backups happen by themselves',
-    body: 'Every time you save in-game, a timestamped backup lands here (and your progress auto-resumes next launch). Download any historical save whenever you need one.'
+    body: 'Every time you save in-game, a timestamped backup is archived automatically (and your progress auto-resumes next launch). Your backup history lives on the play screen, right next to the game.'
   },
   {
     selector: '.bug-fab',
@@ -50,7 +53,7 @@ const TOUR_STEPS = (byoRom) => [
   },
   {
     title: 'Inside a run 🎮',
-    body: 'Open your attempt and you land in the Play view: the emulator (fullscreen on phones), an encounter radar that logs every wild battle automatically, and your live party synced from the game. Catches even mark themselves. Now go start attempt #1!'
+    body: 'Open your attempt and you land on the play screen: emulator, encounter radar, live party, route map and trackers — all in one place, with its own quick tour the first time you arrive. Now go start attempt #1!'
   }
 ]
 
@@ -76,9 +79,20 @@ export default function LobbyHome() {
   const [rules, setRules] = useState({ dupesClause: true, shinyClause: true, hardcore: false })
   const [uploading, setUploading] = useState(false)
   const [regenLink, setRegenLink] = useState(null) // { name, url } after regenerating someone's link
-  const [history, setHistory] = useState(null) // rolling sav/state backup archive
-  const [histShown, setHistShown] = useState(15)
   const [tourOpen, setTourOpen] = useState(false)
+  // Watch party: which live streams THIS viewer has hidden (device-local)
+  const [hiddenStreams, setHiddenStreams] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('nuz-hidden-streams') || '[]')) } catch { return new Set() }
+  })
+  const toggleStream = (memberId) => {
+    setHiddenStreams((prev) => {
+      const next = new Set(prev)
+      if (next.has(memberId)) next.delete(memberId)
+      else next.add(memberId)
+      try { localStorage.setItem('nuz-hidden-streams', JSON.stringify([...next])) } catch { /* fine */ }
+      return next
+    })
+  }
 
   // First arrival: run the tour once PER MEMBER (not per browser — a fresh
   // join in the same browser is a new person). Triggers on the join/create
@@ -99,22 +113,6 @@ export default function LobbyHome() {
     localStorage.setItem(`nuz-tour-done:${memberToken}`, '1')
   }
 
-  const loadHistory = () => api.get('/api/me/save-history').then(setHistory).catch(() => {})
-
-  const downloadHistoryFile = async (f) => {
-    try {
-      const res = await fetch(`/api/me/save-history/${encodeURIComponent(f.file)}`, { headers: authHeaders() })
-      if (!res.ok) throw new Error(`${res.status}`)
-      const url = URL.createObjectURL(await res.blob())
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `attempt${f.attemptNumber ?? 'x'}-${f.savedAt.replace(/[:.]/g, '-').slice(0, 19)}.${f.type === 'mstate' ? 'state' : f.type}`
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 30000)
-    } catch (err) {
-      setError(`Download failed: ${err.message}`)
-    }
-  }
   const fileRef = useRef(null)
   const navigate = useNavigate()
 
@@ -185,12 +183,14 @@ export default function LobbyHome() {
       if (g.length) setGameId(g.find((x) => x.id === 'emerald')?.id || g[0].id)
     }).catch(() => {})
     refresh()
-    loadHistory()
-    const t = setInterval(refresh, 15000)
+    // Faster refresh: presence dots, watcher counts, and live tiles should
+    // feel alive — this is the hangout screen.
+    const t = setInterval(refresh, 7000)
     return () => clearInterval(t)
   }, [sid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = attempts.find((a) => a.status === 'active')
+  const liveMembers = summary.filter((s) => s.live)
 
   useEffect(() => {
     const last = attempts[0]
@@ -274,7 +274,12 @@ export default function LobbyHome() {
       {tourOpen && <Tour steps={TOUR_STEPS(!!me.romCleanMode)} onClose={closeTour} />}
       <div className="run-header">
         <div className="run-title">
-          <h1>{me.lobby.name}</h1>
+          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {me.lobby.name}
+            <Link to="/" title="Home screen — all your lobbies on this device, switch or join another">
+              <button className="small"><Home size={12} /> Switch Lobby</button>
+            </Link>
+          </h1>
           <div className="sub">You are <strong>{me.member.name}</strong> · {me.members.length} runner{me.members.length === 1 ? '' : 's'}</div>
         </div>
         <div className="stat-tiles">
@@ -287,15 +292,81 @@ export default function LobbyHome() {
           <button className="chip" onClick={() => setTourOpen(true)} title="Replay the walkthrough">
             <HelpCircle size={13} /> Tour
           </button>
-          <span className="chip" title={me.publicUrl ? `Links copy with the public tunnel address: ${me.publicUrl}` : 'No tunnel running — links copy with this browser\'s address and may not work for others. Start the tunnel from the admin dashboard.'}>
-            {me.publicUrl ? '🌐 public links' : '⚠ local links'}
-          </span>
+          <a
+            className="chip"
+            href="https://nuzdash.dev"
+            target="_blank"
+            rel="noreferrer"
+            style={{ textDecoration: 'none', color: 'inherit' }}
+            title={(me.publicUrl
+              ? `Links copy with the public tunnel address: ${me.publicUrl}`
+              : 'No tunnel running — links copy with this browser\'s address and may not work for others. Start the tunnel from the admin dashboard.') + ' · Powered by Nuz-Dash — nuzdash.dev'}
+          >
+            <PokeballIcon size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
+            {me.publicUrl ? 'Nuzdash.dev' : '⚠ local links'}
+          </a>
         </div>
       </div>
       {error && <p className="error-note">{error}</p>}
 
       <div className="home-grid">
-        <div className="dash-col">
+        <div className="hg-watch">
+          <div className="panel" data-tour="watch">
+            <h2>
+              <span className="h2-title"><Tv size={14} /> Watch party</span>
+              <span style={{ textTransform: 'none', letterSpacing: 0 }}> · {liveMembers.length} live</span>
+            </h2>
+            {liveMembers.length === 0 ? (
+              <p className="empty-note">
+                Nobody is playing right now — streams pop in here automatically the moment a lobby-mate starts their game.
+              </p>
+            ) : (
+              <>
+                <div className="watch-grid">
+                  {liveMembers.filter((s) => !hiddenStreams.has(s.member.id)).map((s) => (
+                    <div className="watch-cell" key={s.member.id}>
+                      <div className="wc-head">
+                        <strong>{s.member.name}{s.member.id === me.member.id ? ' (you)' : ''}</strong>
+                        {s.watchers?.length > 0 && (
+                          <span className="rr-note" title={`Watching: ${s.watchers.join(', ')}`}>👁 {s.watchers.length}</span>
+                        )}
+                        <span className="spacer" />
+                        <button className="small" title="Hide this stream (just on this device)" onClick={() => toggleStream(s.member.id)}>
+                          <EyeOff size={12} />
+                        </button>
+                      </div>
+                      {s.member.id === me.member.id
+                        ? <StreamView memberId={s.member.id} interval={1500} compact showMeta />
+                        : (
+                          <Link to={`/s/${sid}/view/${s.member.id}`} title={`Spectate ${s.member.name}'s full run`}>
+                            <StreamView memberId={s.member.id} interval={400} compact showMeta />
+                          </Link>
+                        )}
+                    </div>
+                  ))}
+                </div>
+                {liveMembers.some((s) => hiddenStreams.has(s.member.id)) && (
+                  <p className="map-tip" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    Hidden:
+                    {liveMembers.filter((s) => hiddenStreams.has(s.member.id)).map((s) => (
+                      <button key={s.member.id} className="small" onClick={() => toggleStream(s.member.id)}>
+                        <Eye size={12} /> {s.member.name}
+                      </button>
+                    ))}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
+        </div>
+
+        <div className="hg-social">
+          <ChatPanel meId={me.member.id} />
+          <EventLogPanel />
+        </div>
+
+        <div className="hg-side">
           <div className="panel" data-tour="attempts">
             <h2><span className="h2-title"><Trophy size={14} /> Your attempts</span></h2>
             {active ? (
@@ -307,7 +378,10 @@ export default function LobbyHome() {
                   </div>
                 </div>
                 <span className="spacer" />
-                <Link to={`/s/${sid}/run/${active.id}`}><button className="small primary"><Play size={12} /> Continue</button></Link>
+                <a href={`/s/${sid}/run/${active.id}`} target="_blank" rel="noreferrer" title="Open the play screen in a new tab">
+                  <button className="small primary"><Play size={12} /> Play here</button>
+                </a>
+                <QrLaunchButton runId={active.id} />
               </div>
             ) : (
               <p className="empty-note">No active attempt.</p>
@@ -396,8 +470,8 @@ export default function LobbyHome() {
           </div>
         </div>
 
-        <div className="dash-col">
-        <div className="panel" data-tour="runners">
+        <div className="hg-runners">
+          <div className="panel" data-tour="runners">
           <h2><span className="h2-title"><Users size={14} /> Runners</span></h2>
           {regenLink && (
             <div className="warn-note ok" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
@@ -409,12 +483,11 @@ export default function LobbyHome() {
           )}
           {summary.map((s) => (
             <div className="run-card runner-card" key={s.member.id}>
-              {s.live && s.member.id !== me.member.id && (
-                <Link to={`/s/${sid}/view/${s.member.id}`} className="runner-stream">
-                  <StreamView memberId={s.member.id} interval={1000} compact />
-                </Link>
-              )}
               <div className="info">
+                <span
+                  className={`presence-dot ${s.online ? 'on' : ''}`}
+                  title={s.online ? `${s.member.name} is online now` : `${s.member.name} is offline`}
+                />
                 {s.member.id === me.member.id
                   ? <strong>{s.member.name} (you)</strong>
                   : <Link to={`/s/${sid}/view/${s.member.id}`}>{s.member.name}</Link>}
@@ -437,9 +510,25 @@ export default function LobbyHome() {
                   <div className="sub">
                     Attempt #{s.active.attemptNumber} · {s.active.gameName} · 🏅{s.active.badges} · ●{s.active.alive} alive · ☠{s.active.deaths} deaths
                     <span> · active {timeAgo(s.active.updatedAt)}</span>
+                    {s.watchers?.length > 0 && <span> · 👁 {s.watchers.join(', ')} watching</span>}
                   </div>
                 ) : (
                   <div className="sub">{s.attempts === 0 ? 'No attempts yet' : `${s.attempts} past attempt${s.attempts === 1 ? '' : 's'} — none active`}</div>
+                )}
+                {s.active?.snapshot && (s.active.snapshot.party?.length > 0 || s.active.snapshot.area) && (
+                  <div className="runner-snap" title={s.live ? 'Live from their game' : `Last seen ${timeAgo(s.active.snapshot.at)}`}>
+                    {(s.active.snapshot.party || []).map((p, i) => (
+                      <span key={i} className={`sm-mon ${p.hp === 0 ? 'sm-fnt' : ''}`} title={`Lv. ${p.level} · ${p.hp}/${p.maxHp} HP`}>
+                        {p.speciesId ? <img src={spriteUrl(p.speciesId, p.shiny)} alt="" /> : <span className="rr-noimg">?</span>}
+                        <span className="sm-hp"><span
+                          className={p.maxHp && p.hp / p.maxHp > 0.5 ? 'hp-good' : p.maxHp && p.hp / p.maxHp > 0.2 ? 'hp-warn' : 'hp-crit'}
+                          style={{ width: `${p.maxHp ? Math.max(4, (p.hp / p.maxHp) * 100) : 0}%` }}
+                        /></span>
+                      </span>
+                    ))}
+                    {s.active.snapshot.area && <span className="rr-note">📍 {s.active.snapshot.area}</span>}
+                    {!s.live && <span className="rr-note">· as of {timeAgo(s.active.snapshot.at)}</span>}
+                  </div>
                 )}
               </div>
               <span className="spacer" />
@@ -471,43 +560,7 @@ export default function LobbyHome() {
               )}
             </div>
           ))}
-        </div>
-
-        <div className="panel" data-tour="history">
-          <h2>
-            <span className="h2-title"><History size={14} /> Backup history</span>
-            <span className="h-actions">
-              <button className="small" onClick={loadHistory}><RefreshCw size={12} /> Refresh</button>
-            </span>
-          </h2>
-          {!history || history.files.length === 0 ? (
-            <p className="empty-note">No backups yet — they appear automatically every time you save in-game.</p>
-          ) : (
-            <>
-              <p className="map-tip" style={{ marginTop: 0 }}>
-                {history.files.length} file{history.files.length === 1 ? '' : 's'} ·
-                {' '}{(history.totalSize / 1048576).toFixed(1)} MB of {(history.cap / 1073741824).toFixed(0)} GB —
-                oldest are pruned automatically. The newest pair is what the game auto-resumes from.
-              </p>
-              <div className="hist-list">
-                {history.files.slice(0, histShown).map((f) => (
-                  <div className="hist-row" key={f.file}>
-                    <span className="hist-main">
-                      Attempt #{f.attemptNumber ?? '?'} · <code>{f.type === 'mstate' ? '.state (manual)' : `.${f.type}`}</code>
-                    </span>
-                    <span className="hist-meta">{new Date(f.savedAt).toLocaleString()} · {(f.size / 1024).toFixed(0)} KB</span>
-                    <button className="small" title="Download" onClick={() => downloadHistoryFile(f)}><Download size={12} /></button>
-                  </div>
-                ))}
-              </div>
-              {history.files.length > histShown && (
-                <button className="small" style={{ marginTop: 6 }} onClick={() => setHistShown((n) => n + 25)}>
-                  Show more ({history.files.length - histShown} hidden)
-                </button>
-              )}
-            </>
-          )}
-        </div>
+          </div>
         </div>
       </div>
     </div>

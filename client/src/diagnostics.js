@@ -39,6 +39,11 @@ export function collectDiagnostics() {
       core: window.EJS_core || null,
       gameName: window.EJS_gameName || null
     },
+    // Watch-party pipeline counters, both directions (black-frame forensics)
+    stream: {
+      broadcast: window.__nuzStreamStats || null,
+      viewing: window.__nuzViewStats || null
+    },
     recentLogs: buffer.map((e) => ({ ...e, msg: redact(e.msg) }))
   }
 }
