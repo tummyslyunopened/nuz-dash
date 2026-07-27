@@ -21,7 +21,17 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
 ### Data model (JSON stores in `server/data/`, see `server/store.js`)
 
 - `lobbies.json`: lobby { id, name, inviteToken, roms:[max ONE rom] }. Upload
-  replaces the rom in place keeping its id (attempts stay linked).
+  replaces the rom in place keeping its id (attempts stay linked). BYO ROM
+  mode (settings.romCleanMode — public branding "BYO ROM", admin/internal
+  "ROM-clean"): rom entries are fingerprints { file:null, sha256 } —
+  upload/download endpoints 403/404, ROM managers register via POST
+  /api/lobby/rom-meta (client-side SHA-256, same id-keeping replace), runners
+  supply the ROM locally (EmulatorPanel object-URL boot + IndexedDB cache
+  `nuz-rom-cache` in client/src/romcache.js — ROM bytes NEVER reach the
+  server). DEFAULT for fresh installs (boot migration: undefined → true iff
+  no lobbies exist; servers with pre-existing lobbies grandfather to hosted).
+  Disabling (= hosted mode) requires typing HOST ROMS in the admin dashboard;
+  re-enabling hashes then DELETES stored ROM files.
 - `members.json`: member { id, token, lobbyId, name, controls, linkManager,
   romManager }. **token in the URL /m/<token> IS the auth** — sent as
   `X-Member-Token` header (or `?token=` query for fetches that can't set
@@ -44,8 +54,8 @@ built client (`dist/`), vendored EmulatorJS, AND an admin app on a second port.
 - `encounters.json` / `diary.json`: keyed by runId.
 - `maps.json`: keyed `` `${lobbyId}|${gameId}` `` (image + pins + nodes).
 - `settings.json`: { autoTunnel, tunnelMode quick|named, tunnelName,
-  tunnelHostname, localStateDownloads, adminTotp { secret base32, requireLocal,
-  lastCounter } }. adminTotp powers admin 2FA (RFC 6238, no deps, qrcode pkg
+  tunnelHostname, localStateDownloads, romCleanMode, adminTotp { secret base32,
+  requireLocal, lastCounter } }. adminTotp powers admin 2FA (RFC 6238, no deps, qrcode pkg
   for enrollment QR): cloud /admin ALWAYS requires it and forces enrollment on
   first login; localhost enforcement is the requireLocal toggle. Session =
   HttpOnly cookie (in-memory Map, 12h). Brute force: GLOBAL fail counter, 5

@@ -124,6 +124,15 @@ for (const lobby of lobbies.data.lobbies) {
 if (mgrMigrated) members.save()
 if (lobbyMigrated) lobbies.save()
 
+// BYO ROM (ROM-clean mode) is the DEFAULT for new servers: fresh installs
+// never host ROM files. Servers that already have lobbies when this ships
+// keep hosted mode (their runners' setups keep working) until the admin
+// explicitly opts in from the dashboard.
+if (settings.data.settings.romCleanMode === undefined) {
+  settings.data.settings.romCleanMode = lobbies.data.lobbies.length === 0
+  settings.save()
+}
+
 // ---------- Cloudflare tunnel manager ----------
 // The server owns the tunnel process so it always knows the current public
 // URL — which the client uses when copying invite/personal links.
@@ -323,7 +332,9 @@ app.use('/api', (req, res, next) => {
 const lobbyRom = (lobby, romId) => lobby.roms.find((r) => r.id === romId)
 const serializeRun = (run, lobby) => {
   const rom = run.romId ? lobbyRom(lobby, run.romId) : null
-  return { ...run, rom: rom ? { name: rom.name, core: rom.core, size: rom.size } : null }
+  // hosted:false = ROM-clean mode fingerprint entry — the client must supply
+  // the ROM bytes locally (they are never on this server)
+  return { ...run, rom: rom ? { name: rom.name, core: rom.core, size: rom.size, sha256: rom.sha256 || null, hosted: !!rom.file } : null }
 }
 const findRun = (req, id) => {
   const run = runs.data.runs.find((r) => r.id === id)
@@ -401,13 +412,14 @@ app.get('/api/me', (req, res) => {
   res.json({
     publicUrl: tunnel.url, // preferred origin for shareable links
     localDownloads: !!settings.data.settings.localStateDownloads,
+    romCleanMode: !!settings.data.settings.romCleanMode,
     member: { ...publicMember(req.member), controls: req.member.controls || null },
     lobby: {
       id: req.lobby.id,
       name: req.lobby.name,
       inviteToken: req.lobby.inviteToken,
       creatorId: req.lobby.creatorId,
-      roms: req.lobby.roms.map((r) => ({ id: r.id, name: r.name, core: r.core, size: r.size }))
+      roms: req.lobby.roms.map((r) => ({ id: r.id, name: r.name, core: r.core, size: r.size, sha256: r.sha256 || null, hosted: !!r.file }))
     },
     members: members.data.members.filter((m) => m.lobbyId === req.lobby.id).map(publicMember)
   })
@@ -466,19 +478,47 @@ function addRomToLobby(lobby, filename, body) {
 }
 
 app.post('/api/lobby/roms', express.raw({ type: 'application/octet-stream', limit: '512mb' }), (req, res) => {
+  if (settings.data.settings.romCleanMode) return res.status(403).json({ error: 'ROM-clean mode: ROMs stay in runners\' browsers — register a fingerprint instead' })
   if (!req.member.romManager) return res.status(403).json({ error: 'replacing the lobby ROM requires ROM-manager permission' })
   if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty upload' })
   try {
     const entry = addRomToLobby(req.lobby, String(req.query.filename || 'game.gba'), req.body)
-    res.json({ id: entry.id, name: entry.name, core: entry.core, size: entry.size })
+    res.json({ id: entry.id, name: entry.name, core: entry.core, size: entry.size, hosted: true })
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message })
   }
 })
 
+// ROM-clean mode: register WHICH game the lobby races without storing it —
+// name, size and a SHA-256 fingerprint only. Runners supply their own copy
+// locally and the client compares fingerprints. Keeps the existing entry id
+// so attempts stay linked, exactly like a hosted upload/replace.
+app.post('/api/lobby/rom-meta', (req, res) => {
+  if (!settings.data.settings.romCleanMode) return res.status(400).json({ error: 'ROM-clean mode is off — upload the ROM instead' })
+  if (!req.member.romManager) return res.status(403).json({ error: 'registering the lobby ROM requires ROM-manager permission' })
+  const name = String(req.body.name || '').trim()
+  const size = Number(req.body.size)
+  const sha256 = String(req.body.sha256 || '').toLowerCase()
+  if (!name || !Number.isFinite(size) || size <= 0 || !/^[0-9a-f]{64}$/.test(sha256)) {
+    return res.status(400).json({ error: 'name, size and sha256 fingerprint required' })
+  }
+  const ext = name.split('.').pop().toLowerCase()
+  const core = ROM_CORES[ext]
+  if (!core) return res.status(400).json({ error: `Unsupported ROM type ".${ext}" — use .gb, .gbc, .gba or .nds (unzipped).` })
+  const existing = req.lobby.roms[0]
+  if (existing?.file) {
+    try { fs.unlinkSync(path.join(romsDir, existing.file)) } catch { /* already gone */ }
+  }
+  const entry = { id: existing?.id || crypto.randomUUID(), name, file: null, core, size, sha256, uploadedAt: now() }
+  req.lobby.roms = [entry]
+  lobbies.save()
+  res.json({ id: entry.id, name, core, size, sha256, hosted: false })
+})
+
 app.get('/api/lobby/roms/:romId', (req, res) => {
   const rom = lobbyRom(req.lobby, req.params.romId)
   if (!rom) return res.status(404).json({ error: 'rom not found' })
+  if (!rom.file) return res.status(404).json({ error: 'rom is not hosted on this server (ROM-clean mode) — supply it locally' })
   res.sendFile(path.join(romsDir, rom.file))
 })
 
@@ -572,6 +612,7 @@ app.delete('/api/runs/:id', (req, res) => {
 app.post('/api/runs/:id/rom', express.raw({ type: 'application/octet-stream', limit: '512mb' }), (req, res) => {
   const run = ownRun(req, req.params.id)
   if (!run) return res.status(404).json({ error: 'not found or not yours' })
+  if (settings.data.settings.romCleanMode) return res.status(403).json({ error: 'ROM-clean mode: ROMs stay in runners\' browsers — register a fingerprint instead' })
   // This replaces the SHARED lobby ROM (one ROM per lobby), not a per-run copy
   if (!req.member.romManager) return res.status(403).json({ error: 'replacing the lobby ROM requires ROM-manager permission' })
   if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty upload' })
@@ -590,6 +631,7 @@ app.get('/api/runs/:id/rom', (req, res) => {
   const run = findRun(req, req.params.id)
   const rom = run?.romId ? lobbyRom(req.lobby, run.romId) : null
   if (!rom) return res.status(404).json({ error: 'no rom linked' })
+  if (!rom.file) return res.status(404).json({ error: 'rom is not hosted on this server (ROM-clean mode) — supply it locally' })
   res.sendFile(path.join(romsDir, rom.file))
 })
 
@@ -1227,15 +1269,41 @@ function deleteLobbyCascade(lobbyId) {
 const saveAll = () => { lobbies.save(); members.save(); runs.save(); encounters.save(); diary.save(); maps.save() }
 
 adminApp.get('/api/settings', (req, res) => {
-  res.json({ localStateDownloads: !!settings.data.settings.localStateDownloads })
+  res.json({
+    localStateDownloads: !!settings.data.settings.localStateDownloads,
+    romCleanMode: !!settings.data.settings.romCleanMode
+  })
 })
 
 adminApp.post('/api/settings', (req, res) => {
   if (typeof req.body.localStateDownloads === 'boolean') {
     settings.data.settings.localStateDownloads = req.body.localStateDownloads
   }
+  if (typeof req.body.romCleanMode === 'boolean' && req.body.romCleanMode !== !!settings.data.settings.romCleanMode) {
+    if (req.body.romCleanMode) {
+      // Going clean: fingerprint every stored ROM, then delete the file. The
+      // entry (and its id) survives, so attempts stay linked and runners'
+      // local copies can be verified against the recorded hash.
+      for (const lobby of lobbies.data.lobbies) {
+        for (const rom of lobby.roms || []) {
+          if (!rom.file) continue
+          try {
+            const p = path.join(romsDir, rom.file)
+            rom.sha256 = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')
+            fs.unlinkSync(p)
+          } catch { /* file already gone — keep any existing hash */ }
+          rom.file = null
+        }
+      }
+      lobbies.save()
+    }
+    settings.data.settings.romCleanMode = req.body.romCleanMode
+  }
   settings.save()
-  res.json({ localStateDownloads: !!settings.data.settings.localStateDownloads })
+  res.json({
+    localStateDownloads: !!settings.data.settings.localStateDownloads,
+    romCleanMode: !!settings.data.settings.romCleanMode
+  })
 })
 
 // Per-runner save storage: history archive + live resume files

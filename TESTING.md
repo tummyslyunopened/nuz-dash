@@ -60,6 +60,18 @@ failure paths asserted:
 - Admin: overview, lobby/member deletion cascades, bug report write/read/
   delete + filename validation, storage listing, settings toggle round-trip
   (incl. propagation to /api/me), tunnel config endpoints
+- Permissions: link/ROM-manager enforcement (403s for non-managers, self-
+  rotation open, grant/revoke, last-manager guard, creator protection,
+  admin overrides) and the boot migrations (flags + creatorId to oldest
+  member, independent healing)
+- Admin 2FA: enrollment/confirm/verify with real TOTP codes, localhost
+  toggle gating, brute-force lockout (429 incl. valid codes), replay
+  rejection, secret persistence across restart, cloud /admin forced
+  enrollment + basic-auth+code flow, unauthed re-setup/disable blocked
+- ROM-clean mode: enable converts hosted ROM to a correct SHA-256
+  fingerprint and deletes the file, upload/download gating both scopes,
+  fingerprint registration (manager-only, id preserved), run serialization
+  carries sha256/hosted, disable restores uploads keeping the entry id
 - Static/serving: SPA fallback exclusions (emulator files 404 properly),
   sprite proxy, anonymous release downloads, full onboarding flow (site →
   zip → install → build → boot) once per major site change
@@ -99,6 +111,11 @@ pokeemerald-expansion Emerald hack:
 - **Third-party Railway deploys**: template deployed once by the
   maintainer; no external deployer reports yet.
 - **Desktop Firefox/Safari**: developed and play-tested on Chromium.
+- **ROM-clean mode client path**: the browser side (object-URL emulator
+  boot, in-browser SHA-256 verify, IndexedDB ROM cache reuse across
+  reloads) is API-backed but has not been exercised in a real browser yet.
+- **Streamer decoy URLs + join interstitial**: bundle builds and route
+  logic reviewed; not yet click-tested end-to-end in a browser.
 
 ## Feedback loops
 

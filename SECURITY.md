@@ -32,8 +32,11 @@ ROMs, and an admin surface that can read or delete all of it.
   127.0.0.1 (optionally gated by authenticator-app 2FA); on a cloud mount it
   sits behind `ADMIN_TOKEN` basic auth **plus mandatory TOTP 2FA** with
   brute-force lockout and single-use codes.
-- **ROMs and saves never leave the instance**: they are served only to
-  authenticated lobby members and are excluded from the git repo and releases.
+- **BYO ROM by default**: ROM files never reach the server at all — runners
+  supply their own copy in their browser and the server stores only a SHA-256
+  fingerprint. Hosted-ROM mode is an explicit, warning-gated admin opt-in;
+  when enabled, ROMs and saves are served only to authenticated lobby members
+  and are excluded from the git repo and releases.
 
 ## Hardening checklist for self-hosters
 

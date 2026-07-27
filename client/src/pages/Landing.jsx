@@ -4,7 +4,7 @@ import { Radar, Gamepad2, Map, Users, HeartPulse, BookOpen, Plus, KeyRound, Swor
 import { api, rememberLink, knownLinks, forgetLink, pathForToken } from '../api.js'
 
 const FEATURES = [
-  { icon: Gamepad2, title: 'Play in the browser', text: 'Built-in GB/GBA/NDS emulator with your own patched ROMs, save-state slots, and automatic .srm/.state backups on every in-game save.' },
+  { icon: Gamepad2, title: 'Play in the browser', text: 'Built-in GB/GBA/NDS emulator — BYO ROM: your own legally-dumped game (patched hacks welcome) loads straight from your browser and never touches the server. Automatic backups on every in-game save.' },
   { icon: Radar, title: 'Encounter radar', text: 'Wild battles are detected straight from the running game’s memory — species, level, shiny — and logged with one click. Works with expansion ROM hacks.' },
   { icon: HeartPulse, title: 'Live party sync', text: 'Your team, HP bars and faint alerts read directly from the save. Deaths flow into the tracker with a cause-of-death note.' },
   { icon: Users, title: 'Watch party', text: 'Everyone in the lobby streams their game live. Watch your friends’ runs unfold — and their inevitable wipes — in real time.' },

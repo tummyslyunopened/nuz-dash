@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Gamepad2, Radio, Play, Upload, Maximize, X } from 'lucide-react'
 import { authHeaders, memberToken, sessionHeaders } from '../api.js'
+import { sha256Hex, cacheRom, cachedRom } from '../romcache.js'
 
 // "Mobile" = touch device with a small screen (a touch laptop shouldn't count)
 const isMobile = () => window.matchMedia('(pointer: coarse) and (max-width: 900px)').matches
@@ -62,15 +63,49 @@ export default function EmulatorPanel({ run, setRun }) {
   const [mobileFs, setMobileFs] = useState(false)
   // Replacing the ROM swaps the SHARED lobby game — ROM managers only
   const [canManageRom, setCanManageRom] = useState(false)
+  const [cleanMode, setCleanMode] = useState(false)
+  // ROM-clean mode: the ROM comes from the runner's own machine and only
+  // ever exists in this browser. { bytes, name, sha256, match }
+  const [localRom, setLocalRom] = useState(null)
+  const [keepCopy, setKeepCopy] = useState(true)
+  const [hashing, setHashing] = useState(false)
   const fileRef = useRef(null)
+  const romPickRef = useRef(null)
   const mountWrapRef = useRef(null)
+
+  // This run's ROM entry is a fingerprint, not a hosted file
+  const byoRom = !!run.rom && run.rom.hosted === false
 
   useEffect(() => {
     fetch('/api/me', { headers: authHeaders() })
       .then((r) => r.json())
-      .then((d) => setCanManageRom(!!d.member?.romManager))
+      .then((d) => { setCanManageRom(!!d.member?.romManager); setCleanMode(!!d.romCleanMode) })
       .catch(() => {})
   }, [])
+
+  // BYO boot: reuse the copy this browser already has, if any
+  useEffect(() => {
+    if (!byoRom || localRom) return
+    cachedRom(run.rom.sha256).then((entry) => {
+      if (entry) setLocalRom({ bytes: entry.bytes, name: entry.name, sha256: run.rom.sha256, match: true, cached: true })
+    })
+  }, [byoRom, run.rom?.sha256]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickLocalRom = async (file) => {
+    setHashing(true)
+    setError('')
+    try {
+      const bytes = await file.arrayBuffer()
+      const hash = await sha256Hex(bytes)
+      const match = run.rom.sha256 ? hash === run.rom.sha256 : null
+      setLocalRom({ bytes, name: file.name, sha256: hash, match, cached: false })
+      if (keepCopy) cacheRom(hash, file.name, bytes)
+    } catch (err) {
+      setError(`Could not read the ROM file: ${err.message}`)
+    } finally {
+      setHashing(false)
+    }
+  }
 
   // Mobile fullscreen: CSS takeover everywhere (iPhone has no element
   // fullscreen API), plus native fullscreen + landscape lock where supported.
@@ -348,6 +383,10 @@ export default function EmulatorPanel({ run, setRun }) {
   }
 
   const start = async () => {
+    if (byoRom && !localRom) {
+      setError('Pick your ROM file first — BYO ROM boots straight from your browser.')
+      return
+    }
     if (primeDownloadPermission()) return // answer the prompt first, then tap Start again
     // RULE: every prompt (confirm/permission) must resolve BEFORE entering
     // mobile fullscreen — a dialog over fullscreen breaks it. Keep the awaits
@@ -400,8 +439,12 @@ export default function EmulatorPanel({ run, setRun }) {
     window.EJS_player = '#ejs-mount'
     window.EJS_core = run.rom.core
     window.EJS_gameName = run.rom.name.replace(/\.[^.]+$/, '')
-    // EmulatorJS fetches the ROM itself and can't send headers — pass the token as a query param
-    window.EJS_gameUrl = `/api/runs/${run.id}/rom?token=${memberToken}`
+    // EmulatorJS fetches the ROM itself and can't send headers — pass the
+    // token as a query param. In ROM-clean mode the bytes never touch the
+    // network at all: boot from an object URL over this browser's copy.
+    window.EJS_gameUrl = byoRom
+      ? URL.createObjectURL(new Blob([localRom.bytes]))
+      : `/api/runs/${run.id}/rom?token=${memberToken}`
     window.EJS_pathtodata = '/emulatorjs/'
     window.EJS_startOnLoaded = true
     window.EJS_backgroundColor = '#0d0d0d'
@@ -433,7 +476,7 @@ export default function EmulatorPanel({ run, setRun }) {
             <span className="chip rom-chip" title={`${run.rom.name} · ${fmtSize(run.rom.size)} · ${run.rom.core.toUpperCase()}`}>
               {run.rom.name} · {fmtSize(run.rom.size)} · {run.rom.core.toUpperCase()}
             </span>
-            {canManageRom && (
+            {canManageRom && !byoRom && (
               <button className="small" onClick={() => fileRef.current?.click()} disabled={busy || started}>Replace</button>
             )}
             <button className="small danger" onClick={removeRom} disabled={busy}>Remove</button>
@@ -447,25 +490,63 @@ export default function EmulatorPanel({ run, setRun }) {
         style={{ display: 'none' }}
         onChange={(e) => e.target.files[0] && upload(e.target.files[0])}
       />
+      <input
+        ref={romPickRef}
+        type="file"
+        accept=".gb,.gbc,.sgb,.gba,.nds"
+        style={{ display: 'none' }}
+        onChange={(e) => e.target.files[0] && pickLocalRom(e.target.files[0])}
+      />
       {!run.rom ? (
         <div className="map-upload">
-          <p>No ROM linked to this attempt. Pick one from the lobby's ROM library when starting an attempt{canManageRom ? ", or upload one here (it's added to the lobby library)" : ''}.</p>
-          {canManageRom ? (
-            <>
-              <p>Legally-dumped ROMs only — patched ROM hacks welcome (.gb / .gbc / .gba / .nds, unzipped).</p>
-              <button className="primary" onClick={() => fileRef.current?.click()} disabled={busy}>
-                <Upload size={14} /> {busy ? 'Uploading…' : 'Upload ROM'}
-              </button>
-            </>
+          {cleanMode ? (
+            <p>BYO ROM: a ROM manager registers the lobby's game from the lobby page (only its
+            fingerprint is stored). Each runner then supplies their own copy here — it never leaves the browser.</p>
           ) : (
-            <p>Uploading a new lobby ROM is limited to ROM managers (the lobby creator, by default).</p>
+            <>
+              <p>No ROM linked to this attempt. Pick one from the lobby's ROM library when starting an attempt{canManageRom ? ", or upload one here (it's added to the lobby library)" : ''}.</p>
+              {canManageRom ? (
+                <>
+                  <p>Legally-dumped ROMs only — patched ROM hacks welcome (.gb / .gbc / .gba / .nds, unzipped).</p>
+                  <button className="primary" onClick={() => fileRef.current?.click()} disabled={busy}>
+                    <Upload size={14} /> {busy ? 'Uploading…' : 'Upload ROM'}
+                  </button>
+                </>
+              ) : (
+                <p>Uploading a new lobby ROM is limited to ROM managers (the lobby creator, by default).</p>
+              )}
+            </>
           )}
         </div>
       ) : (
         <>
-          {!started && (
+          {!started && byoRom && !localRom && (
             <div className="map-upload">
-              <p>{run.rom.name} is ready.</p>
+              <p>This lobby races <strong>{run.rom.name}</strong> ({fmtSize(run.rom.size)}), but the server
+              doesn't host it — pick your own copy to play. It loads straight into the emulator and
+              never leaves your browser.</p>
+              <button className="primary" onClick={() => romPickRef.current?.click()} disabled={hashing}>
+                <Upload size={14} /> {hashing ? 'Checking…' : 'Pick your ROM file'}
+              </button>
+              <p className="map-tip" style={{ marginTop: 8 }}>
+                <label><input type="checkbox" checked={keepCopy} onChange={(e) => setKeepCopy(e.target.checked)} />
+                {' '}Remember it in this browser so you don't have to pick it again (stored locally only)</label>
+              </p>
+            </div>
+          )}
+          {!started && (!byoRom || localRom) && (
+            <div className="map-upload">
+              {byoRom ? (
+                <p>
+                  {localRom.name} loaded from {localRom.cached ? 'this browser' : 'your file'} ·{' '}
+                  {localRom.match === true && <span style={{ color: 'var(--good)' }}>fingerprint matches the lobby ✓</span>}
+                  {localRom.match === false && <span style={{ color: 'var(--warning, #fab219)' }}>⚠ fingerprint differs from the lobby's registered ROM — you may be racing a different patch</span>}
+                  {localRom.match === null && 'no lobby fingerprint to compare against'}
+                  {' '}<button className="small" style={{ marginLeft: 6 }} onClick={() => romPickRef.current?.click()}>Pick a different file</button>
+                </p>
+              ) : (
+                <p>{run.rom.name} is ready.</p>
+              )}
               <div className="launch-row">
                 <select value={selectedSave} onChange={(e) => setSelectedSave(e.target.value)} title="Which save to boot from">
                   <option value="latest">Resume latest save{run.sav?.savedAt ? ` (${fmtWhen(run.sav.savedAt)})` : ''}</option>

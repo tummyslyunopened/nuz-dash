@@ -111,6 +111,14 @@ async function loadSrvSettings() {
       Local .state downloads in players' browsers (per in-game save + manual states, plus the one-time
       "allow multiple downloads" priming flow). Off by default — the server pair and history are the backups.</label>
     </div>
+    <div class="meta" style="margin-top:8px">
+      <label><input type="checkbox" ${s.romCleanMode ? 'checked' : ''} onchange="toggleRomClean(this.checked)">
+      <b>BYO ROM (ROM-clean mode)</b> — the default: no ROM files ever touch this server. Runners supply
+      their own ROM in their browser; the server stores only a SHA-256 fingerprint to verify everyone
+      races the same game. <b>Unchecking this makes YOUR server store and distribute uploaded ROM
+      files</b> — a deliberate, host-liability decision that requires typed confirmation. Re-enabling
+      later DELETES stored ROM files (fingerprints kept, save data untouched).</label>
+    </div>
     <div class="meta" style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px">
       <b>Admin 2FA (authenticator app):</b> ${t.enrolled ? '<span style="color:var(--good)">enrolled ✓</span>' : 'not set up'}
       — a cloud /admin mount ${t.enrolled ? 'asks for a code at every login' : 'forces enrollment on its first login'}.
@@ -232,6 +240,33 @@ async function totpDisable() {
 async function toggleLocalDownloads(enabled) {
   await call('POST', 'api/settings', { localStateDownloads: enabled })
   toast(enabled ? 'Local downloads enabled — players pick it up within a session reload' : 'Local downloads disabled')
+}
+
+async function toggleRomClean(enabled) {
+  if (enabled) {
+    if (!confirm('Re-enable BYO ROM (ROM-clean mode)? Any ROM files stored on this server are DELETED (their fingerprints are kept, save data is untouched) and every runner supplies their own ROM in their browser. Continue?')) {
+      loadSrvSettings()
+      return
+    }
+  } else {
+    const typed = prompt(
+      'You are about to switch this server to HOSTED-ROM mode.\n\n' +
+      'That means THIS MACHINE will store uploaded ROM files and distribute them to every member ' +
+      'of the lobby. ROMs are copyrighted software: Nuz-Dash ships no game files, and by disabling ' +
+      'BYO ROM you — the server operator — take sole responsibility for the legality of storing and ' +
+      'sharing these files in your jurisdiction. Intended only for private groups where every runner ' +
+      'owns their own legal copy.\n\n' +
+      'Type HOST ROMS to confirm:')
+    if (typed !== 'HOST ROMS') {
+      toast('Hosted-ROM mode NOT enabled')
+      loadSrvSettings()
+      return
+    }
+  }
+  await call('POST', 'api/settings', { romCleanMode: enabled })
+  toast(enabled ? 'BYO ROM mode ON — server-side ROM files removed' : 'Hosted-ROM mode ON — ROM managers can upload')
+  loadSrvSettings()
+  loadLobbies()
 }
 
 async function loadStorage() {

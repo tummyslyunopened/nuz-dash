@@ -100,7 +100,7 @@
   </section>
 
   <section class="grid">
-    <div class="card"><span class="em">🎮</span><h3>Play anywhere</h3><p>Built-in GB / GBA / NDS emulator, right in the browser — desktop or phone (fullscreen with touch controls). Scan a QR from your desktop and keep playing on your phone, same run, no login. Saves resume automatically from the server.</p></div>
+    <div class="card"><span class="em">🎮</span><h3>Play anywhere — BYO ROM</h3><p>Built-in GB / GBA / NDS emulator, right in the browser — desktop or phone (fullscreen with touch controls). BYO ROM: your own legally-dumped game loads straight from your browser and never touches the server. Scan a QR from your desktop and keep playing on your phone, same run, no login. Saves resume automatically from the server.</p></div>
     <div class="card"><span class="em">📡</span><h3>Encounter radar</h3><p>Wild battles are detected from the running game's memory — species, level, shiny — and logged with one click. Works with pokeemerald-expansion hacks, fakemon included.</p></div>
     <div class="card"><span class="em">❤️</span><h3>Live party sync</h3><p>Team, HP bars, and faint alerts parsed straight from the battery save. Deaths flow into the tracker with a cause-of-death note. Auto backups on every in-game save.</p></div>
     <div class="card"><span class="em">👀</span><h3>Watch party</h3><p>Every runner streams their game to the lobby. Watch friends' runs — and their wipes — live while you play yours.</p></div>
@@ -127,7 +127,7 @@
       <pre>npm install
 npm run build
 npm start</pre>
-      <p>Open <code>http://localhost:4517</code> — create your lobby and you're the first runner.</p>
+      <p>Open <code>http://localhost:4517</code> — create your lobby and you're the first runner. Register your game (BYO ROM: you pick the file, it stays in your browser, the server keeps only a fingerprint) and start attempt #1.</p>
     </div>
     <div class="step">
       <h3>Go public with a Cloudflare Tunnel</h3>
@@ -201,16 +201,17 @@ npm start</pre>
   <div class="faq">
     <details>
       <summary>Where do ROMs come from?</summary>
-      <p>You. Nuz-Dash ships zero game files — each lobby's host uploads their own legally-dumped ROM (patched hacks included). The ROM stays on the host's server and is served only to that lobby's members so everyone races the same game — it's designed for private groups where each runner owns their own copy.</p>
+      <p>You — and they stay with you. Nuz-Dash ships zero game files, and by default (<b>BYO ROM</b>) the server never stores any either: each runner picks their own legally-dumped ROM (patched hacks included) in their browser, where it boots straight into the emulator without ever uploading. The server keeps only a SHA-256 fingerprint so everyone provably races the same game. Private groups where every runner owns a legal copy can explicitly opt into classic hosted-ROM mode from the admin dashboard — that choice, and its responsibility, belongs to the host.</p>
     </details>
     <details>
       <summary>Where is my data stored?</summary>
-      <p>Everything lives in <code>server/data/</code> on the host machine as plain JSON plus your ROMs, save states, and sprites. Back up that folder and you've backed up every run. Runners also get automatic local <code>.srm</code> + <code>.state</code> downloads on every in-game save.</p>
+      <p>Everything lives in <code>server/data/</code> on the host machine as plain JSON plus save states and sprites (and ROM files only if the host explicitly opted into hosted-ROM mode). Back up that folder and you've backed up every run. Runners also get automatic local <code>.srm</code> + <code>.state</code> downloads on every in-game save.</p>
     </details>
     <details>
       <summary>How does login work with no accounts?</summary>
       <p>Secret links. Creating or joining a lobby mints a personal URL containing a random token — possession of the link is the identity. Share invite links privately, bookmark your personal link, and rotate it anytime if it leaks.</p>
       <p>Streamer-safe URL bar. The secret link is only in the address bar for the instant you sign in — it's immediately swapped for a random decoy session URL that works only in that browser, so showing your screen (or a VOD frame of it) never leaks your login.</p>
+      <p>BYO ROM by default. New servers never store or serve ROM files: each runner supplies their own ROM directly in their browser — it boots into the emulator locally and never touches the server, which keeps only a SHA-256 fingerprint to verify everyone races the same game. Hosting ROMs on the server is an explicit admin opt-in, gated behind a typed confirmation of what that choice means.</p>
       <p>Found a security issue? Report it privately to <a href="mailto:bucket-pox-depose@duck.com">bucket-pox-depose@duck.com</a> instead of a public GitHub issue — see <a href="https://github.com/tummyslyunopened/nuz-dash/blob/main/SECURITY.md">SECURITY.md</a> for the full policy and a hardening checklist for self-hosters.</p>
     </details>
     <details>

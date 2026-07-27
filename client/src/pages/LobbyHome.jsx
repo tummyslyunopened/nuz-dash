@@ -2,10 +2,11 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Link2, KeyRound, Check, Upload, Play, RotateCcw, Eye, Trophy, Gamepad2, Users, History, Download, RefreshCw, HelpCircle, ShieldCheck, ShieldOff, Crown } from 'lucide-react'
 import { api, authHeaders, rememberLink, forgetLink, memberToken, pathForToken } from '../api.js'
+import { sha256Hex } from '../romcache.js'
 import StreamView from '../components/StreamView.jsx'
 import Tour from '../components/Tour.jsx'
 
-const TOUR_STEPS = [
+const TOUR_STEPS = (byoRom) => [
   {
     title: 'Welcome to Nuz-Dash! 👋',
     body: 'This lobby is home base for you and your friends: race Nuzlocke attempts side by side, watch each other play live, and let the app track everything automatically. Quick tour?'
@@ -22,8 +23,10 @@ const TOUR_STEPS = [
   },
   {
     selector: '[data-tour="rom"]',
-    title: 'One ROM, one race',
-    body: 'The lobby has a single game everyone runs — the creator (or a deputized ROM manager) uploads a legally-dumped ROM (patched hacks welcome). Every runner should own their own copy of the game.'
+    title: 'One game, one race',
+    body: byoRom
+      ? 'BYO ROM: the creator (or a deputized ROM manager) registers WHICH game the lobby races — then every runner picks their own legally-dumped copy (patched hacks welcome) right in their browser. Your ROM loads locally and never touches the server.'
+      : 'The lobby has a single game everyone runs — the creator (or a deputized ROM manager) uploads a legally-dumped ROM (patched hacks welcome). Every runner should own their own copy of the game.'
   },
   {
     selector: '[data-tour="attempts"]',
@@ -223,6 +226,22 @@ export default function LobbyHome() {
     }
   }
 
+  // ROM-clean mode: the file is hashed HERE in the browser — only the
+  // fingerprint (name, size, SHA-256) is sent to the server.
+  const registerRomMeta = async (file) => {
+    setUploading(true)
+    setError('')
+    try {
+      const sha256 = await sha256Hex(await file.arrayBuffer())
+      const entry = await api.post('/api/lobby/rom-meta', { name: file.name, size: file.size, sha256 })
+      setMe((m) => ({ ...m, lobby: { ...m.lobby, roms: [entry] } }))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const startAttempt = async (e) => {
     e.preventDefault()
     setError('')
@@ -252,7 +271,7 @@ export default function LobbyHome() {
 
   return (
     <div className="app-shell">
-      {tourOpen && <Tour steps={TOUR_STEPS} onClose={closeTour} />}
+      {tourOpen && <Tour steps={TOUR_STEPS(!!me.romCleanMode)} onClose={closeTour} />}
       <div className="run-header">
         <div className="run-title">
           <h1>{me.lobby.name}</h1>
@@ -340,24 +359,37 @@ export default function LobbyHome() {
               {me.member.romManager && (
                 <span className="h-actions">
                   <button className="small" onClick={() => fileRef.current?.click()} disabled={uploading}>
-                    <Upload size={12} /> {uploading ? 'Uploading…' : me.lobby.roms.length ? 'Replace ROM' : 'Upload ROM'}
+                    <Upload size={12} /> {uploading
+                      ? (me.romCleanMode ? 'Registering…' : 'Uploading…')
+                      : me.romCleanMode
+                        ? (me.lobby.roms.length ? 'Re-register ROM' : 'Register ROM')
+                        : (me.lobby.roms.length ? 'Replace ROM' : 'Upload ROM')}
                   </button>
                 </span>
               )}
             </h2>
             <input ref={fileRef} type="file" accept=".gb,.gbc,.sgb,.gba,.nds" style={{ display: 'none' }}
-              onChange={(e) => e.target.files[0] && uploadRom(e.target.files[0])} />
+              onChange={(e) => e.target.files[0] && (me.romCleanMode ? registerRomMeta(e.target.files[0]) : uploadRom(e.target.files[0]))} />
             {me.lobby.roms.length === 0 ? (
               <p className="empty-note">
-                {me.member.romManager
-                  ? 'No ROM yet — upload the patched ROM this lobby will race. One ROM per lobby; it\'s served to every runner here, so make sure everyone in the lobby owns their own legal copy of the game.'
-                  : 'No ROM yet — a ROM manager (the lobby creator, by default) uploads the game this lobby will race.'}
+                {me.romCleanMode
+                  ? (me.member.romManager
+                    ? 'BYO ROM: pick your ROM file to register WHICH game this lobby races — only its fingerprint (name, size, SHA-256) is stored here. Every runner supplies their own copy in their browser.'
+                    : 'BYO ROM: a ROM manager registers the game (fingerprint only); each runner then supplies their own copy in their browser.')
+                  : me.member.romManager
+                    ? 'No ROM yet — upload the patched ROM this lobby will race. One ROM per lobby; it\'s served to every runner here, so make sure everyone in the lobby owns their own legal copy of the game.'
+                    : 'No ROM yet — a ROM manager (the lobby creator, by default) uploads the game this lobby will race.'}
               </p>
             ) : (
               <div className="run-card">
                 <div className="info">
                   <strong>{me.lobby.roms[0].name}</strong>
-                  <div className="sub">{me.lobby.roms[0].core.toUpperCase()} · {fmtSize(me.lobby.roms[0].size)} · used by every attempt in this lobby</div>
+                  <div className="sub">
+                    {me.lobby.roms[0].core.toUpperCase()} · {fmtSize(me.lobby.roms[0].size)} ·{' '}
+                    {me.lobby.roms[0].hosted === false
+                      ? <>BYO ROM — each runner supplies their own copy locally, fingerprint <code style={{ fontSize: 10 }}>{(me.lobby.roms[0].sha256 || '').slice(0, 12)}…</code></>
+                      : 'used by every attempt in this lobby'}
+                  </div>
                 </div>
               </div>
             )}

@@ -38,9 +38,10 @@ For development with hot reload: `npm run dev` (client on http://localhost:5173)
 - **Run diary** — freeform timestamped entries, optionally tagged with a location.
 - **Built-in emulator (Play view)** — a self-hosted [EmulatorJS](https://emulatorjs.org)
   (GPLv3) with GB/GBC (gambatte), GBA (mGBA) and NDS (melonDS) cores vendored in
-  `server/emulatorjs-data/`, so it works offline. Upload your own legally-dumped ROM
-  (patched ROM hacks included) per run — stored in `server/data/roms/`, served only to
-  your browser. Save states are in the emulator's own menu.
+  `server/emulatorjs-data/`, so it works offline. **BYO ROM**: your own
+  legally-dumped ROM (patched ROM hacks included) loads straight from your browser
+  and never touches the server — see [BYO ROM](#byo-rom-the-default) below.
+  Save states are in the emulator's own menu.
 - **Encounter radar** — live wild-battle detection for Gen 3 games (vanilla and
   expansion-based hacks): the app finds the party bytes in the emulator's memory
   (self-calibrating, no hardcoded addresses), watches the enemy-party slot, and reads
@@ -81,6 +82,23 @@ supports two modes:
   the browser), then **Create tunnel & route DNS**, then start the tunnel. The
   server runs `cloudflared tunnel run` for you and every copied invite/member
   link uses the hostname.
+
+### BYO ROM (the default)
+
+Nuz-Dash never stores or serves ROM files by default. A ROM manager
+"registers" the lobby's game by picking their file — only its name, size and
+SHA-256 fingerprint are sent. Each runner then picks their own legally-dumped
+copy in their browser: it boots straight into the emulator, is fingerprint-
+checked against the lobby's registered game, and never leaves the browser
+(optionally remembered per device in the browser's own storage).
+
+Hosting ROMs on the server (classic hosted mode: upload once, served to every
+lobby member) is an explicit opt-in in the admin dashboard, gated behind a
+typed confirmation — by disabling BYO ROM the host takes sole responsibility
+for storing and distributing those files. Re-enabling BYO ROM later deletes
+stored ROM files (fingerprints are kept; save data is never touched).
+Servers that already had lobbies before this feature keep hosted mode until
+the admin opts in, so nothing breaks on upgrade.
 
 Found a security issue? See [SECURITY.md](SECURITY.md) — report privately to
 **bucket-pox-depose@duck.com** rather than opening a public issue.
@@ -171,10 +189,13 @@ gaps (notably iOS) — see [TESTING.md](TESTING.md).
   It is provided **as-is, without warranty of any kind**. Bundled third-party
   components and their licenses are listed in
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- **Game files:** Nuz-Dash ships no ROMs. Hosts and players supply their own
-  legally-obtained game files. A lobby's ROM is served to that lobby's members so
-  everyone runs the same patched game — this is intended for private groups where
-  **each runner owns their own copy of the game**.
+- **Game files:** Nuz-Dash ships no ROMs, and by default (BYO ROM) the server
+  stores none either — each runner supplies their own legally-obtained copy in
+  their browser, verified against a fingerprint. If a host explicitly opts into
+  hosted-ROM mode, that lobby's ROM is served to its members so everyone runs
+  the same patched game — intended for private groups where **each runner owns
+  their own copy of the game**, and the host bears responsibility for that
+  choice.
 - **Affiliation:** Nuz-Dash is a fan-made tool, not affiliated with or endorsed by
   Nintendo, Game Freak, or The Pokemon Company. Pokemon names and sprites are their
   trademarks and copyrights.
