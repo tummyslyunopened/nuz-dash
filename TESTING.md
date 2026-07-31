@@ -21,6 +21,10 @@ never against live data.
 - Pokemon decryption (personality⊕OT key), substructure shuffle orders,
   checksum-relevant fields, Gen 3 text decoding
 - Emerald and FireRed/LeafGreen party offsets
+- PC storage (sections 5-13): box mons incl. one spanning a section
+  boundary, box names + unnamed fallback, currentBox; ALSO verified against
+  the maintainer's real expansion-hack sav (12 mons across 3 boxes,
+  nicknames/species/slots all correct)
 - Hoenn internal→national species table (spot checks incl. boundaries)
 - Expansion-hack species masking (`& 0x7FF`)
 
@@ -32,6 +36,11 @@ never against live data.
 - Deep scan finding enemies at non-standard offsets with correct deltas
 - Expansion species masking; ROM species-name table discovery (stride
   detection) and name lookup
+- Live position: x/y read from SaveBlock1, DMA re-anchor (frozen stale
+  header rejected via party-copy personality anchor, shifted block found
+  nearby, wrong anchor → null)
+- Global Hoenn grid: origin+local math, Route 101/Littleroot seam
+  continuity, null for indoor/dungeon/Sootopolis maps
 
 Additionally validated once against a **real 128MB heap dump** of a running
 pokeemerald-expansion hack (calibration → detection → name resolution,
@@ -83,6 +92,12 @@ failure paths asserted:
   summary, stream frames with X-Stream-Meta round-tripping area+party via
   the meta endpoint, watcher tracking (frame fetch → watcher names in both
   stream meta and lobby summary)
+- Live map positions: pos in stream meta → /api/lobby/positions round-trip
+  (live entry with area/lead/at), junk pos rejected by the sanitizer
+  (strings/oversized/object fields → no entry)
+- BYO sav upload tagging: ?source=upload → run.sav.uploaded + .usav history
+  entry (listed as type sav + uploaded:true); a following normal push
+  clears the latest-uploaded flag and lists uploaded:false
 - Static/serving: SPA fallback exclusions (emulator files 404 properly),
   sprite proxy, anonymous release downloads, full onboarding flow (site →
   zip → install → build → boot) once per major site change
@@ -141,6 +156,12 @@ pokeemerald-expansion Emerald hack:
   against real fade-to-black battles.
 - **Lobby hangout UX on phones**: new layout (watch grid + chat first)
   reviewed in code only.
+- **Position pill + lobby live map + save pickers (browser side)**: the
+  emulator-overlay pill (incl. post-save/post-battle DMA survival), the
+  canvas live map (schematic region, sprite interpolation, indoor dimming),
+  the .sav upload flow (validation preview, session-conflict 409 path), and
+  the parsed-preview "Load a save" picker are server/unit-tested but await
+  real-play verification.
 
 ## Feedback loops
 

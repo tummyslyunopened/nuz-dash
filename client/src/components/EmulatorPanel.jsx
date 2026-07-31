@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Gamepad2, Radio, Play, Upload, Maximize, X } from 'lucide-react'
-import { authHeaders, memberToken, sessionHeaders } from '../api.js'
+import { authHeaders, memberToken, sessionHeaders, titleCase } from '../api.js'
 import { sha256Hex, cacheRom, cachedRom } from '../romcache.js'
+import { parseGen3Save, parsePCBoxes } from '../gen3save.js'
+import { areaLabel } from '../gen3maps.js'
 import StreamDiagnostics from './StreamDiagnostics.jsx'
 
 // "Mobile" = touch device with a small screen (a touch laptop shouldn't count)
@@ -157,6 +159,26 @@ export default function EmulatorPanel({ run, setRun }) {
     return () => window.removeEventListener('nuz:exit-mobile-fs', h)
   }, [])
 
+  // While the game runs, gameplay keys must never double as page scrolling:
+  // EmulatorJS listens on window, so the game responds even when the canvas
+  // isn't the focused element — but the browser would ALSO scroll on arrows/
+  // space. Swallow the default at window level, except while typing in a
+  // field (chat, encounter annotations, etc.).
+  useEffect(() => {
+    if (!started) return
+    const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '])
+    const h = (e) => {
+      if (!SCROLL_KEYS.has(e.key)) return
+      const t = e.target
+      if (t?.isContentEditable) return
+      const tag = t?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      e.preventDefault()
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [started])
+
   // Controller bindings follow the member: watch the live mapping while
   // playing and push changes to the server (loaded back at game start).
   useEffect(() => {
@@ -185,7 +207,11 @@ export default function EmulatorPanel({ run, setRun }) {
   const [savOptions, setSavOptions] = useState([])
   const [selectedSave, setSelectedSave] = useState('latest')
   const [showLoader, setShowLoader] = useState(false)
-  const [loaderChoice, setLoaderChoice] = useState('latest')
+  const [pickerSel, setPickerSel] = useState('latest')
+  const [savShown, setSavShown] = useState(8)
+  const [preview, setPreview] = useState(null) // parsed peek at the selected save
+  const previewCacheRef = useRef(new Map()) // choice -> preview (per loader open)
+  const bytesCacheRef = useRef(new Map()) // choice -> bytes (skip re-download on apply)
 
   const loadSavHistory = async () => {
     try {
@@ -196,6 +222,13 @@ export default function EmulatorPanel({ run, setRun }) {
   useEffect(() => { if (run.rom) loadSavHistory() }, [run.id, run.rom?.name]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fmtWhen = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const fmtAgo = (iso) => {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000)
+    if (s < 90) return 'just now'
+    if (s < 5400) return `${Math.round(s / 60)} min ago`
+    if (s < 129600) return `${Math.round(s / 3600)} h ago`
+    return `${Math.round(s / 86400)} d ago`
+  }
 
   const fetchSavBytes = async (choice) => {
     const url = choice === 'latest'
@@ -243,11 +276,11 @@ export default function EmulatorPanel({ run, setRun }) {
 
   // Post-start recovery: apply any battery save and restart the emulator to
   // the title screen — fixes "my save didn't load" without a page reload.
-  const applySave = async () => {
+  const applySave = async (choice) => {
     try {
       const gm = window.EJS_emulator?.gameManager
       if (!gm) throw new Error('game is not running')
-      const bytes = await fetchSavBytes(loaderChoice)
+      const bytes = bytesCacheRef.current.get(choice) || await fetchSavBytes(choice)
       if (!bytes) throw new Error('save not found on the server')
       writeSavToFs(gm, bytes)
       gm.restart()
@@ -256,6 +289,47 @@ export default function EmulatorPanel({ run, setRun }) {
     } catch (err) {
       setStateMsg(`Load failed: ${err.message}`)
     }
+  }
+
+  // Loader picker: selecting a save downloads + parses it so the runner sees
+  // WHOSE progress it is (party, save counter, location) before committing.
+  const selectPick = async (choice) => {
+    setPickerSel(choice)
+    const cached = previewCacheRef.current.get(choice)
+    if (cached) { setPreview(cached); return }
+    setPreview({ choice, loading: true })
+    let pv
+    try {
+      const bytes = await fetchSavBytes(choice)
+      if (!bytes) throw new Error('not on the server')
+      bytesCacheRef.current.set(choice, bytes)
+      const p = parseGen3Save(bytes)
+      const lead = p.party[0]
+      let pcCount = null
+      try { pcCount = parsePCBoxes(bytes).count } catch { /* boxes optional */ }
+      pv = {
+        choice,
+        ok: true,
+        text: `${p.game} · save #${p.saveIndex} · party of ${p.party.length}` +
+          (lead ? ` — ${titleCase(lead.nickname || '?')} Lv. ${lead.level}` : '') +
+          (pcCount ? ` · ${pcCount} in PC` : '') +
+          ` · ${areaLabel(p.location.mapGroup, p.location.mapNum)}`
+      }
+    } catch (err) {
+      pv = { choice, ok: false, text: `Could not read this save: ${err.message}` }
+    }
+    previewCacheRef.current.set(choice, pv)
+    // Only surface it if the user hasn't clicked away to another row since
+    setPickerSel((cur) => { if (cur === choice) setPreview(pv); return cur })
+  }
+
+  const openLoader = () => {
+    loadSavHistory()
+    previewCacheRef.current.clear() // 'latest' may have changed since last open
+    bytesCacheRef.current.clear()
+    setSavShown(8)
+    setShowLoader(true)
+    selectPick('latest')
   }
 
   // ---- Single-session guard: only one live tab/device syncs a run ----
@@ -690,9 +764,9 @@ export default function EmulatorPanel({ run, setRun }) {
               )}
               <div className="launch-row">
                 <select value={selectedSave} onChange={(e) => setSelectedSave(e.target.value)} title="Which save to boot from">
-                  <option value="latest">Resume latest save{run.sav?.savedAt ? ` (${fmtWhen(run.sav.savedAt)})` : ''}</option>
+                  <option value="latest">Resume latest save{run.sav?.savedAt ? ` (${fmtWhen(run.sav.savedAt)}${run.sav.uploaded ? ', uploaded' : ''})` : ''}</option>
                   {savOptions.map((f) => (
-                    <option key={f.file} value={f.file}>Save from {fmtWhen(f.savedAt)}</option>
+                    <option key={f.file} value={f.file}>Save from {fmtWhen(f.savedAt)}{f.uploaded ? ' (uploaded)' : ''}</option>
                   ))}
                   <option value="fresh">Fresh boot (no save)</option>
                 </select>
@@ -719,24 +793,60 @@ export default function EmulatorPanel({ run, setRun }) {
           {started && streaming && <StreamDiagnostics source="broadcast" />}
           {started && (
             <>
-              <div className="launch-row" style={{ justifyContent: 'flex-start', marginTop: 6 }}>
-                {!showLoader ? (
-                  <button className="small" onClick={() => { loadSavHistory(); setShowLoader(true) }}>
+              {!showLoader ? (
+                <div className="launch-row" style={{ justifyContent: 'flex-start', marginTop: 6 }}>
+                  <button className="small" onClick={openLoader}>
                     Load a save…
                   </button>
-                ) : (
-                  <>
-                    <select value={loaderChoice} onChange={(e) => setLoaderChoice(e.target.value)}>
-                      <option value="latest">Latest save{run.sav?.savedAt ? ` (${fmtWhen(run.sav.savedAt)})` : ''}</option>
-                      {savOptions.map((f) => (
-                        <option key={f.file} value={f.file}>Save from {fmtWhen(f.savedAt)}</option>
-                      ))}
-                    </select>
-                    <button className="small primary" onClick={applySave}>Apply &amp; restart game</button>
+                </div>
+              ) : (
+                <div className="save-picker">
+                  <div
+                    className={`sp-row ${pickerSel === 'latest' ? 'sel' : ''}`}
+                    onClick={() => selectPick('latest')}
+                  >
+                    <span className="sp-main">
+                      Latest save
+                      {run.sav?.uploaded && <span className="hist-tag" title="Imported from an offline emulator">uploaded</span>}
+                    </span>
+                    <span className="sp-meta">
+                      {run.sav?.savedAt ? `${fmtAgo(run.sav.savedAt)} · ${fmtWhen(run.sav.savedAt)}` : 'no server save yet'}
+                      {run.sav?.size ? ` · ${(run.sav.size / 1024).toFixed(0)} KB` : ''}
+                    </span>
+                  </div>
+                  {savOptions.slice(0, savShown).map((f) => (
+                    <div
+                      key={f.file}
+                      className={`sp-row ${pickerSel === f.file ? 'sel' : ''}`}
+                      onClick={() => selectPick(f.file)}
+                    >
+                      <span className="sp-main">
+                        Save from {fmtWhen(f.savedAt)}
+                        {f.uploaded && <span className="hist-tag" title="Imported from an offline emulator">uploaded</span>}
+                      </span>
+                      <span className="sp-meta">{fmtAgo(f.savedAt)} · {(f.size / 1024).toFixed(0)} KB</span>
+                    </div>
+                  ))}
+                  {savOptions.length > savShown && (
+                    <button className="small" onClick={() => setSavShown((n) => n + 10)}>
+                      Show older ({savOptions.length - savShown} more)
+                    </button>
+                  )}
+                  <p className={preview?.ok === false ? 'error-note' : 'map-tip'} style={{ margin: '6px 0' }}>
+                    {!preview ? 'Select a save to preview it.' : preview.loading ? 'Reading save…' : preview.text}
+                  </p>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      className="small primary"
+                      disabled={!preview || preview.loading || preview.ok === false}
+                      onClick={() => applySave(pickerSel)}
+                    >
+                      Load &amp; restart game
+                    </button>
                     <button className="small" onClick={() => setShowLoader(false)}>Cancel</button>
-                  </>
-                )}
-              </div>
+                  </div>
+                </div>
+              )}
               <p className="map-tip">
                 Progress resumes automatically: every in-game save updates the server auto-save, which loads on your
                 next launch. "Load a save" restarts the game to the title screen with the chosen save — picking an

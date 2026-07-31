@@ -61,6 +61,7 @@ import EncounterRadar from '../components/EncounterRadar.jsx'
 import WatchPartyPanel from '../components/WatchPartyPanel.jsx'
 import QrLaunchButton from '../components/QrLaunchButton.jsx'
 import TrainersPanel from '../components/TrainersPanel.jsx'
+import PCBoxPanel from '../components/PCBoxPanel.jsx'
 
 export default function RunPage() {
   const { sid, id } = useParams()
@@ -74,6 +75,7 @@ export default function RunPage() {
   const [trainerId, setTrainerId] = useState(null)
   const [savInfo, setSavInfo] = useState(null) // sav-derived layout facts for the radar
   const [area, setArea] = useState('') // live current location from the radar
+  const [livePos, setLivePos] = useState(null) // live tile position from the radar
   const [trainers, setTrainers] = useState([])
   const [tourOpen, setTourOpen] = useState(false)
 
@@ -107,6 +109,7 @@ export default function RunPage() {
   useEffect(() => {
     window.__nuzStreamMeta = {
       area: area || null,
+      pos: livePos, // { x, y, map, gx?, gy? } — drives the lobby live map
       party: lastParty.slice(0, 6).map((m) => ({
         speciesId: m.nationalId ?? null,
         level: m.level,
@@ -116,7 +119,7 @@ export default function RunPage() {
       }))
     }
     return () => { window.__nuzStreamMeta = null }
-  }, [area, lastParty])
+  }, [area, lastParty, livePos])
 
   if (error) {
     return (
@@ -263,6 +266,7 @@ export default function RunPage() {
             onLogged={(enc) => setEncounters((es) => [...es, enc])}
             onUnlogged={(encId) => setEncounters((es) => es.filter((e) => e.id !== encId))}
             onArea={setArea}
+            onPos={setLivePos}
             onTrainerLogged={(t) => setTrainers((ts) => (ts.some((x) => x.id === t.id) ? ts.map((x) => (x.id === t.id ? t : x)) : [...ts, t]))}
           />
           </div>
@@ -277,6 +281,7 @@ export default function RunPage() {
             onAutoCaught={autoCaught}
           />
           </div>
+          <PCBoxPanel run={run} />
           <div data-tour="map"><MapPanel run={run} encounters={encounters} locations={locations} map={map} setMap={setMap} /></div>
           <TypeLookup />
         </div>
@@ -284,7 +289,7 @@ export default function RunPage() {
           <div data-tour="encounters"><EncountersPanel run={run} encounters={encounters} setEncounters={setEncounters} locations={locations} prefill={prefill} /></div>
           <div data-tour="trainers"><TrainersPanel run={run} trainers={trainers} setTrainers={setTrainers} /></div>
           <div data-tour="watchparty"><WatchPartyPanel /></div>
-          <div data-tour="backup"><BackupHistoryPanel /></div>
+          <div data-tour="backup"><BackupHistoryPanel run={run} /></div>
           <DiaryPanel run={run} locations={locations} />
         </div>
       </div>

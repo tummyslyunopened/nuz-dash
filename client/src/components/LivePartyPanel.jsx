@@ -143,6 +143,10 @@ export default function LivePartyPanel({ run, encounters, onMarkDead, onImport, 
         pushServerPair(bytes)
       } else if (parsed.saveIndex > prev) {
         backupNow(bytes, parsed.saveIndex)
+        // Emerald re-randomizes its save-block pointers on every in-game
+        // save, so the radar's located SaveBlock1 address just went stale —
+        // hand it the fresh sav facts so it can re-locate immediately.
+        window.dispatchEvent(new CustomEvent('nuz:ingame-save', { detail: parsed }))
       }
     } catch (err) {
       setError(err.message)

@@ -5,6 +5,7 @@ import { api, authHeaders, rememberLink, forgetLink, memberToken, pathForToken, 
 import { sha256Hex } from '../romcache.js'
 import StreamView from '../components/StreamView.jsx'
 import ChatPanel from '../components/ChatPanel.jsx'
+import LiveMapPanel from '../components/LiveMapPanel.jsx'
 import EventLogPanel from '../components/EventLogPanel.jsx'
 import QrLaunchButton from '../components/QrLaunchButton.jsx'
 import Tour from '../components/Tour.jsx'
@@ -359,6 +360,7 @@ export default function LobbyHome() {
             )}
           </div>
 
+          <LiveMapPanel meId={me.member.id} />
         </div>
 
         <div className="hg-social">

@@ -453,6 +453,23 @@ const watchersOf = (targetId) => {
 }
 const STREAM_FRESH_MS = 8000
 
+// Live tile position riding on stream meta (radar-derived, client-supplied):
+// whitelist + clamp before it is stored or re-served to lobby-mates.
+const cleanPos = (p) => {
+  if (!p || typeof p !== 'object') return null
+  const n = (v) => (Number.isFinite(v) && Math.abs(v) <= 100000 ? Math.round(v) : null)
+  const x = n(p.x)
+  const y = n(p.y)
+  if (x == null || y == null) return null
+  const gx = n(p.gx)
+  const gy = n(p.gy)
+  return {
+    x, y,
+    ...(gx != null && gy != null ? { gx, gy } : {}),
+    ...(typeof p.map === 'string' ? { map: p.map.slice(0, 16) } : {})
+  }
+}
+
 app.get('/api/lobby/summary', (req, res) => {
   const out = members.data.members
     .filter((m) => m.lobbyId === req.lobby.id)
@@ -479,6 +496,46 @@ app.get('/api/lobby/summary', (req, res) => {
         } : null
       }
     })
+  res.json(out)
+})
+
+// Live map: every lobby-mate's current tile position. Live entries come from
+// fresh stream meta (~1s cadence via the radar); offline runners fall back to
+// their persisted lastSnapshot position, marked live:false so the map can
+// dim them. Memory-only for live data — nothing new is persisted here.
+app.get('/api/lobby/positions', (req, res) => {
+  const out = []
+  for (const m of members.data.members.filter((x) => x.lobbyId === req.lobby.id)) {
+    const frame = streams.get(m.id)
+    const livePos = frame && Date.now() - frame.at < STREAM_FRESH_MS ? cleanPos(frame.meta?.pos) : null
+    if (livePos) {
+      out.push({
+        memberId: m.id,
+        name: m.name,
+        live: true,
+        pos: livePos,
+        area: frame.meta?.area || null,
+        lead: Array.isArray(frame.meta?.party) ? frame.meta.party[0] || null : null,
+        at: frame.at
+      })
+      continue
+    }
+    const run = runs.data.runs.find((r) => r.memberId === m.id && r.status === 'active')
+    const snap = run?.lastSnapshot
+    const snapPos = snap ? cleanPos(snap.pos) : null
+    if (snapPos) {
+      out.push({
+        memberId: m.id,
+        name: m.name,
+        live: false,
+        pos: snapPos,
+        area: snap.area || null,
+        lead: Array.isArray(snap.party) ? snap.party[0] || null : null,
+        at: new Date(snap.at).getTime() || null
+      })
+    }
+  }
+  res.set('Cache-Control', 'no-store')
   res.json(out)
 })
 
@@ -949,7 +1006,7 @@ function deleteRunHistory(memberId, runId) {
   }
 }
 
-const HIST_FILE = /^[\w.-]+__[\w-]+\.(state|sav|mstate)$/
+const HIST_FILE = /^[\w.-]+__[\w-]+\.(state|sav|mstate|usav)$/
 
 app.get('/api/me/save-history', (req, res) => {
   const dir = path.join(historyDir, req.member.id)
@@ -960,12 +1017,13 @@ app.get('/api/me/save-history', (req, res) => {
   }
   const files = fs.readdirSync(dir)
     .map((f) => {
-      const m = /^(.+)__(.+)\.(state|sav|mstate)$/.exec(f)
+      const m = /^(.+)__(.+)\.(state|sav|mstate|usav)$/.exec(f)
       if (!m) return null
       const st = fs.statSync(path.join(dir, f))
       return {
         file: f,
-        type: m[3],
+        type: m[3] === 'usav' ? 'sav' : m[3], // usav IS a sav — provenance rides separately
+        uploaded: m[3] === 'usav',
         runId: m[2],
         attemptNumber: attemptByRun[m[2]] ?? null,
         size: st.size,
@@ -1019,9 +1077,12 @@ app.post('/api/runs/:id/sav', express.raw({ type: 'application/octet-stream', li
   if (!run) return res.status(404).json({ error: 'not found or not yours' })
   if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty save' })
   if (sessionConflict(req, run.id)) return res.status(409).json({ error: 'run is being played in another session' })
+  // ?source=upload marks a BYO save (offline-emulator import) — archived as
+  // .usav so the provenance survives in history and pickers can badge it.
+  const uploaded = req.query.source === 'upload'
   writeAtomic(path.join(statesDir, `${run.id}-battery.sav`), req.body)
-  archiveSaveFile(req.member.id, run.id, 'sav', req.body)
-  run.sav = { savedAt: now(), size: req.body.length }
+  archiveSaveFile(req.member.id, run.id, uploaded ? 'usav' : 'sav', req.body)
+  run.sav = { savedAt: now(), size: req.body.length, ...(uploaded ? { uploaded: true } : {}) }
   run.updatedAt = now()
   runs.save()
   res.json(serializeRun(run, req.lobby))
@@ -1091,6 +1152,7 @@ app.post('/api/stream', express.raw({ type: ['image/jpeg', 'application/octet-st
           run.lastSnapshot = {
             area: meta.area || null,
             party: Array.isArray(meta.party) ? meta.party.slice(0, 6) : [],
+            pos: cleanPos(meta.pos), // last-known map position for the live map
             at: now()
           }
           runs.save()

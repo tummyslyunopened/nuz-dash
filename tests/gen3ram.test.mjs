@@ -1,8 +1,8 @@
 // Synthetic-heap tests for the encounter radar (calibration, enemy scan,
 // deep scan, candidate ranking, ROM species-name table discovery).
 import assert from 'node:assert'
-import { calibrateIn, scanEnemiesIn, deepScanIn, findSpeciesTableIn, speciesTableNameIn, locateSaveBlock1In, readLocationIn } from '../client/src/gen3ram.js'
-import { mapAreaName, areaLabel } from '../client/src/gen3maps.js'
+import { calibrateIn, scanEnemiesIn, deepScanIn, findSpeciesTableIn, speciesTableNameIn, locateSaveBlock1In, readLocationIn, relocateSaveBlock1In } from '../client/src/gen3ram.js'
+import { mapAreaName, areaLabel, globalPosition } from '../client/src/gen3maps.js'
 
 const heap = new Uint8Array(1 << 20) // 1MB fake WASM heap
 const dv = new DataView(heap.buffer)
@@ -147,10 +147,11 @@ heap[sb1 + 5] = 17 // mapNum -> Route 102
 dv.setInt16(partyAddr - PARTY_MONS_OFFSET, 30000, true)
 const foundSb1 = locateSaveBlock1In(heap, candidates, PARTY_MONS_OFFSET, { mapGroup: 0, mapNum: 17 })
 assert.equal(foundSb1, sb1, 'SaveBlock1 located via sav-anchored party offset')
-assert.deepEqual(readLocationIn(heap, foundSb1), { mapGroup: 0, mapNum: 17 })
+assert.deepEqual(readLocationIn(heap, foundSb1), { mapGroup: 0, mapNum: 17, x: 12, y: 30 })
 // walking to a new map updates the live read
 heap[sb1 + 5] = 18
-assert.deepEqual(readLocationIn(heap, foundSb1), { mapGroup: 0, mapNum: 18 })
+dv.setInt16(sb1, 13, true) // one step east
+assert.deepEqual(readLocationIn(heap, foundSb1), { mapGroup: 0, mapNum: 18, x: 13, y: 30 })
 
 // Area names: routes, towns, collapsed dungeons, safari, fallback
 assert.equal(mapAreaName(0, 17), 'Route 102')
@@ -161,5 +162,30 @@ assert.equal(mapAreaName(24, 8), 'Granite Cave')
 assert.equal(mapAreaName(26, 2), 'Safari Zone')
 assert.equal(mapAreaName(31, 5), null)
 assert.equal(areaLabel(31, 5), 'Area 31.5')
+
+// DMA re-anchor: an unmoved block passes at its own base (O(1) fast path)
+assert.equal(relocateSaveBlock1In(heap, foundSb1, PARTY_MONS_OFFSET, 1111), foundSb1)
+// Emerald's battle-transition DMA shifts the block a small multiple of 4 and
+// leaves a frozen, sane-looking header at the old base. The old base must be
+// REJECTED (its party-copy anchor no longer matches) and the new base found.
+const SHIFT = 68
+heap.copyWithin(foundSb1 + SHIFT, foundSb1, staleAddr + 200)
+const movedSb1 = relocateSaveBlock1In(heap, foundSb1, PARTY_MONS_OFFSET, 1111)
+assert.equal(movedSb1, foundSb1 + SHIFT, 'moved SaveBlock1 re-anchored')
+assert.deepEqual(readLocationIn(heap, movedSb1), { mapGroup: 0, mapNum: 18, x: 13, y: 30 })
+// wrong anchor (party changed out from under us) finds nothing
+assert.equal(relocateSaveBlock1In(heap, movedSb1, PARTY_MONS_OFFSET, 4242), null)
+
+// Global Hoenn grid: origin + local pos
+assert.deepEqual(globalPosition(0, 9, 5, 3), { gx: 125, gy: 285 }) // Littleroot
+// Seam continuity: Route 101's bottom row (local y=19) sits one tile above
+// Littleroot's top row (local y=0), at the same global x.
+const seamAbove = globalPosition(0, 16, 5, 19)
+const seamBelow = globalPosition(0, 9, 5, 0)
+assert.equal(seamAbove.gx, seamBelow.gx)
+assert.equal(seamAbove.gy + 1, seamBelow.gy)
+// No global position indoors, in dungeons, or in Sootopolis (no land links)
+assert.equal(globalPosition(24, 11, 3, 3), null)
+assert.equal(globalPosition(0, 7, 3, 3), null)
 
 console.log('gen3ram: all assertions passed')

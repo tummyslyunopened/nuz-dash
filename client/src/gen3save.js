@@ -87,7 +87,10 @@ export function parseMonAt(dv, u8, off) {
   return parseMon(dv, u8, off)
 }
 
-function parseMon(dv, u8, off) {
+// The 80-byte "box" portion shared by party and PC mons: header (personality,
+// OT, nickname) + the encrypted/shuffled 48-byte substructure block. Party
+// mons append 20 bytes of battle stats on top; PC mons are exactly this.
+function parseBoxMonCore(dv, u8, off) {
   const personality = dv.getUint32(off, true)
   const otId = dv.getUint32(off + 4, true)
   if (personality === 0 && otId === 0) return null
@@ -109,8 +112,6 @@ function parseMon(dv, u8, off) {
   if (internalSpecies === 0) return null
   const ivWord = ddv.getUint32(miscOff + 4, true)
 
-  const statusWord = dv.getUint32(off + 80, true)
-  const hp = dv.getUint16(off + 86, true)
   return {
     personality,
     otId,
@@ -121,7 +122,17 @@ function parseMon(dv, u8, off) {
     maskedSpecies: internalSpecies & 0x7ff,
     nationalId: internalToNational(internalSpecies),
     isEgg: !!((ivWord >> 30) & 1),
-    shiny: (((otId & 0xffff) ^ (otId >>> 16)) ^ ((personality & 0xffff) ^ (personality >>> 16))) < 8,
+    shiny: (((otId & 0xffff) ^ (otId >>> 16)) ^ ((personality & 0xffff) ^ (personality >>> 16))) < 8
+  }
+}
+
+function parseMon(dv, u8, off) {
+  const core = parseBoxMonCore(dv, u8, off)
+  if (!core) return null
+  const statusWord = dv.getUint32(off + 80, true)
+  const hp = dv.getUint16(off + 86, true)
+  return {
+    ...core,
     level: u8[off + 84],
     hp,
     maxHp: dv.getUint16(off + 88, true),
@@ -129,13 +140,11 @@ function parseMon(dv, u8, off) {
   }
 }
 
-export function parseGen3Save(buffer) {
-  const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+function pickCurrentSlot(u8) {
   if (u8.length < SECTION_SIZE * SECTIONS_PER_SLOT) {
     throw new Error(`Not a Gen 3 save (${u8.length} bytes — expected at least 57KB)`)
   }
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength)
-
   const slots = [readSlot(dv, 0)]
   if (u8.length >= 0xe000 * 2) slots.push(readSlot(dv, 0xe000))
   const valid = slots.filter(Boolean)
@@ -144,6 +153,12 @@ export function parseGen3Save(buffer) {
   const slot = valid
     .filter((s) => s.saveIndex !== 0xffffffff)
     .sort((a, b) => b.saveIndex - a.saveIndex)[0] || valid[0]
+  return { slot, dv }
+}
+
+export function parseGen3Save(buffer) {
+  const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+  const { slot, dv } = pickCurrentSlot(u8)
 
   const sec0 = slot.sections[0]
   const sec1 = slot.sections[1]
@@ -176,4 +191,45 @@ export function parseGen3Save(buffer) {
     // radar derive SaveBlock1's live address from its calibrated party hits.
     partyMonsOffset: partyBase + 4
   }
+}
+
+// ---------------------------------------------------------------------------
+// PC storage (PokemonStorage): spans save sections 5-13, concatenated in
+// section-id order. Layout: currentBox u32, then 14 boxes x 30 slots x
+// 80-byte BoxPokemon, then 14 x 9-byte box names, then 14 wallpaper bytes =
+// 33744 bytes total (8 full 3968-byte sections + 2000 from section 13).
+
+const PC_SIZE = 33744
+const PC_BOXES = 14
+const PC_SLOTS = 30
+const PC_BOXES_OFF = 4
+const PC_NAMES_OFF = PC_BOXES_OFF + PC_BOXES * PC_SLOTS * 80
+
+export function parsePCBoxes(buffer) {
+  const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+  const { slot } = pickCurrentSlot(u8)
+  const storage = new Uint8Array(PC_SIZE)
+  let p = 0
+  for (let id = 5; id <= 13 && p < PC_SIZE; id++) {
+    const off = slot.sections[id]
+    if (off === undefined) throw new Error(`PC storage section ${id} missing from the save`)
+    const take = Math.min(3968, PC_SIZE - p)
+    storage.set(u8.subarray(off, off + take), p)
+    p += take
+  }
+  const sdv = new DataView(storage.buffer)
+  const currentBox = sdv.getUint32(0, true)
+  const boxes = []
+  let count = 0
+  for (let b = 0; b < PC_BOXES; b++) {
+    const name = decodeGen3Text(storage.subarray(PC_NAMES_OFF + b * 9, PC_NAMES_OFF + b * 9 + 9)) || `Box ${b + 1}`
+    const mons = []
+    for (let s = 0; s < PC_SLOTS; s++) {
+      const mon = parseBoxMonCore(sdv, storage, PC_BOXES_OFF + (b * PC_SLOTS + s) * 80)
+      if (mon) mons.push({ slot: s, ...mon })
+    }
+    count += mons.length
+    boxes.push({ name, mons })
+  }
+  return { currentBox: currentBox < PC_BOXES ? currentBox : 0, boxes, count }
 }

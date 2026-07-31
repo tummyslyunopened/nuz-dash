@@ -3,13 +3,13 @@ import { createPortal } from 'react-dom'
 import { Radar, ScanSearch, HardDriveDownload } from 'lucide-react'
 import { api, spriteUrl, titleCase, authHeaders } from '../api.js'
 import { TYPE_COLORS, TYPE_EMOJI } from '../typechart.js'
-import { calibrate, scanEnemies, probe, deepScan, dumpHeap, findSpeciesTable, speciesTableName, locateSaveBlock1, readLocation } from '../gen3ram.js'
-import { areaLabel } from '../gen3maps.js'
+import { calibrate, scanEnemies, probe, deepScan, dumpHeap, findSpeciesTable, speciesTableName, locateSaveBlock1, readLocation, relocateSaveBlock1 } from '../gen3ram.js'
+import { areaLabel, globalPosition } from '../gen3maps.js'
 import { collectDiagnostics } from '../diagnostics.js'
 import { loadIndex } from './PokemonSearch.jsx'
 import { emulatorRunning } from './EmulatorPanel.jsx'
 
-export default function EncounterRadar({ run, encounters, party, trainerId, savInfo, onLogged, onUnlogged, onArea, onTrainerLogged }) {
+export default function EncounterRadar({ run, encounters, party, trainerId, savInfo, onLogged, onUnlogged, onArea, onPos, onTrainerLogged }) {
   const [watching, setWatching] = useState(false)
   const [candidates, setCandidates] = useState([])
   const [recent, setRecent] = useState([]) // latest auto-logged detections
@@ -32,6 +32,8 @@ export default function EncounterRadar({ run, encounters, party, trainerId, savI
   const sb1Ref = useRef(null)
   const areaRef = useRef('')
   const [area, setArea] = useState('')
+  const posRef = useRef(null)
+  const [pos, setPos] = useState(null) // live raw x,y — shown in the emulator pill
   const savInfoRef = useRef(null)
   savInfoRef.current = savInfo
 
@@ -159,6 +161,30 @@ export default function EncounterRadar({ run, encounters, party, trainerId, savI
   const stoppedByUserRef = useRef(false)
   const doStartRef = useRef(null)
 
+  // Emerald shuffles its save-block pointers on EVERY in-game save, which
+  // silently invalidates the located SaveBlock1 address (live position/area
+  // freeze or vanish). Re-locate from fresh candidates — targeted on purpose:
+  // detection state (seen set, priming) is untouched, since the game can't
+  // save mid-battle. The event detail is the just-parsed sav, whose save-time
+  // location equals the current one — the strongest anchor we ever get.
+  const relocateSb1 = (si) => {
+    if (!watching) return
+    try {
+      const { candidates: found } = calibrate(party)
+      setCandidates(found)
+      sb1Ref.current = locateSaveBlock1(found, si?.partyMonsOffset, si?.location)
+    } catch { /* auto-recovery recalibration will catch up */ }
+  }
+  const relocateRef = useRef(null)
+  relocateRef.current = relocateSb1
+  const lastFullLocateRef = useRef(0)
+
+  useEffect(() => {
+    const h = (e) => relocateRef.current?.(e.detail || savInfoRef.current)
+    window.addEventListener('nuz:ingame-save', h)
+    return () => window.removeEventListener('nuz:ingame-save', h)
+  }, [])
+
   // Emulator-menu state/save loads rewrite memory — recalibrate right away
   // instead of waiting for the recovery loop to notice.
   useEffect(() => {
@@ -226,17 +252,35 @@ export default function EncounterRadar({ run, encounters, party, trainerId, savI
     const tick = () => {
       try {
         // Live location first, so a detection in the same tick gets the area
-        if (sb1Ref.current != null) {
-          try {
-            const loc = readLocation(sb1Ref.current)
-            const name = loc ? areaLabel(loc.mapGroup, loc.mapNum) : ''
-            if (name !== areaRef.current) {
-              areaRef.current = name
-              setArea(name)
-              onArea?.(name)
-            }
-          } catch { /* heap unavailable this tick */ }
-        }
+        try {
+          // Battle/menu transitions DMA-shift SaveBlock1 a few bytes and
+          // leave a frozen sane-looking header at the old base — re-anchor
+          // every tick via the party copy inside the block. Never read a
+          // base that failed the anchor: frozen coordinates lie.
+          const si = savInfoRef.current
+          const anchorPid = si?.party?.[0]?.personality
+          if (sb1Ref.current != null && anchorPid != null && si?.partyMonsOffset) {
+            sb1Ref.current = relocateSaveBlock1(sb1Ref.current, si.partyMonsOffset, anchorPid)
+          }
+          if (sb1Ref.current == null && si?.partyMonsOffset && Date.now() - lastFullLocateRef.current > 8000) {
+            // lost, or moved beyond the near window — full re-locate, throttled
+            lastFullLocateRef.current = Date.now()
+            relocateRef.current?.(si)
+          }
+          const loc = readLocation(sb1Ref.current)
+          const name = loc ? areaLabel(loc.mapGroup, loc.mapNum) : ''
+          if (name !== areaRef.current) {
+            areaRef.current = name
+            setArea(name)
+            onArea?.(name)
+          }
+          if (loc ? (posRef.current?.x !== loc.x || posRef.current?.y !== loc.y || posRef.current?.map !== `${loc.mapGroup}.${loc.mapNum}`) : posRef.current) {
+            const g = loc ? globalPosition(loc.mapGroup, loc.mapNum, loc.x, loc.y) : null
+            posRef.current = loc ? { x: loc.x, y: loc.y, map: `${loc.mapGroup}.${loc.mapNum}`, ...g } : null
+            setPos(posRef.current)
+            onPos?.(posRef.current)
+          }
+        } catch { /* heap unavailable this tick */ }
         const enemies = scanEnemies(candidates, (pid) => seenRef.current.has(pid), [600, -600, ...extraDeltas])
         for (const raw of enemies) {
           seenRef.current.add(raw.personality)
@@ -316,9 +360,19 @@ export default function EncounterRadar({ run, encounters, party, trainerId, savI
     name ? titleCase(name) : `#${mon.maskedSpecies ?? mon.internalSpecies}`
 
   const fsWrap = fsActive ? document.getElementById('ejs-wrap') : null
+  // The pill lives in the emulator wrap in AND out of fullscreen (native
+  // fullscreen renders only descendants, so it must be portaled inside).
+  const ejsWrap = document.getElementById('ejs-wrap')
 
   return (
     <div className="panel">
+      {ejsWrap && watching && pos && createPortal(
+        <div className="pos-pill" title={pos.gx != null ? `Global Hoenn tile (map-local ${pos.x}, ${pos.y})` : 'Map-local tile (no global position for this map)'}>
+          {area && <span className="pos-pill-area">{area} · </span>}
+          {pos.gx != null ? <>🌐 {pos.gx}, {pos.gy}</> : <>📍 {pos.x}, {pos.y}</>}
+        </div>,
+        ejsWrap
+      )}
       {fsWrap && toasts.length > 0 && createPortal(
         <div className="fs-toasts">
           {toasts.map((t) => (

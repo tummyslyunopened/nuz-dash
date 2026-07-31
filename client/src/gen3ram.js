@@ -189,12 +189,42 @@ export function readLocationIn(heap, sb1) {
   const group = heap[sb1 + 4]
   const num = heap[sb1 + 5]
   if (group > 63 || num > 200) return null
-  return { mapGroup: group, mapNum: num }
+  const dv = new DataView(heap.buffer, heap.byteOffset, heap.byteLength)
+  return { mapGroup: group, mapNum: num, x: dv.getInt16(sb1, true), y: dv.getInt16(sb1 + 2, true) }
+}
+
+// Emerald's anti-cheat DMA re-bases SaveBlock1 by a small random multiple of
+// 4 on battle/menu transitions (and a full re-roll on save). The old base
+// keeps a frozen, sane-LOOKING header (live position silently freezes), so
+// staleness must be detected via the party copy INSIDE the block: the last-
+// saved lead mon's personality must sit at partyMonsOffset. When it doesn't,
+// hunt outward for the moved block — closest first; real shifts are tiny
+// (< 0x80 bytes), so this is O(1) per tick when nothing moved.
+export function relocateSaveBlock1In(heap, sb1, partyMonsOffset, anchorPersonality, maxShift = 512) {
+  if (sb1 == null || !partyMonsOffset || anchorPersonality == null) return null
+  const dv = new DataView(heap.buffer, heap.byteOffset, heap.byteLength)
+  const anchor = anchorPersonality >>> 0
+  const ok = (base) => {
+    if (base < 0 || base + partyMonsOffset + 4 > heap.byteLength) return false
+    if (dv.getUint32(base + partyMonsOffset, true) !== anchor) return false
+    const x = dv.getInt16(base, true)
+    const y = dv.getInt16(base + 2, true)
+    if (x < -16 || x > 4000 || y < -16 || y > 4000) return false
+    return heap[base + 4] <= 63 && heap[base + 5] <= 200
+  }
+  if (ok(sb1)) return sb1
+  for (let d = 4; d <= maxShift; d += 4) {
+    if (ok(sb1 + d)) return sb1 + d
+    if (ok(sb1 - d)) return sb1 - d
+  }
+  return null
 }
 
 export const locateSaveBlock1 = (candidates, partyMonsOffset, savLocation) =>
   locateSaveBlock1In(getHeap(), candidates, partyMonsOffset, savLocation)
 export const readLocation = (sb1) => readLocationIn(getHeap(), sb1)
+export const relocateSaveBlock1 = (sb1, partyMonsOffset, anchorPersonality) =>
+  relocateSaveBlock1In(getHeap(), sb1, partyMonsOffset, anchorPersonality)
 
 export const calibrate = (party) => calibrateIn(getHeap(), party)
 export const scanEnemies = (candidates, isKnown, deltas) => scanEnemiesIn(getHeap(), candidates, isKnown, deltas)

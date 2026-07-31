@@ -1,6 +1,6 @@
 // Synthetic-save unit test for the Gen 3 battery-save parser.
 import assert from 'node:assert'
-import { parseGen3Save, internalToNational } from '../client/src/gen3save.js'
+import { parseGen3Save, parsePCBoxes, internalToNational } from '../client/src/gen3save.js'
 
 const buf = new Uint8Array(0x20000)
 const dv = new DataView(buf.buffer)
@@ -102,5 +102,44 @@ const frlg = parseGen3Save(buf)
 assert.equal(frlg.game, 'FireRed/LeafGreen')
 assert.equal(frlg.party.length, 1)
 assert.equal(frlg.party[0].nationalId, 1)
+
+// ---- PC storage (sections 5-13 concatenated, 3968 data bytes each) ----
+// Map a PokemonStorage offset to its location in the save file
+const pcByte = (off) => (5 + Math.floor(off / 3968)) * 0x1000 + (off % 3968)
+function writePCMon(storageOff, { personality, otId, nickBytes, species }) {
+  const tmp = new Uint8Array(80)
+  const tdv = new DataView(tmp.buffer)
+  tdv.setUint32(0, personality, true)
+  tdv.setUint32(4, otId, true)
+  tmp.set(nickBytes, 8)
+  const key = personality ^ otId
+  const order = ORDERS[personality % 24]
+  const plain = new Uint8Array(48)
+  const pdv = new DataView(plain.buffer)
+  pdv.setUint16(order.indexOf('G') * 12, species, true)
+  for (let w = 0; w < 12; w++) tdv.setUint32(32 + w * 4, pdv.getUint32(w * 4, true) ^ key, true)
+  for (let i = 0; i < 80; i++) buf[pcByte(storageOff + i)] = tmp[i]
+}
+dv.setUint32(5 * 0x1000, 1, true) // currentBox = 1
+// Box 1 slot 0: Treecko
+writePCMon(4, { personality: 305419896, otId: 1, nickBytes: [0xce, 0xcc, 0xbf, 0xbf, 0xff], species: 277 })
+// Box 2 slot 19: Pikachu — this mon SPANS the section 5/6 boundary
+writePCMon(4 + (30 + 19) * 80, { personality: 24, otId: 2, nickBytes: [0xff], species: 25 })
+// Box 2 name "CAVE" (names live at storage offset 33604, inside section 13)
+const nameBytes = [0xbd, 0xbb, 0xd0, 0xbf, 0xff] // C A V E
+for (let i = 0; i < nameBytes.length; i++) buf[pcByte(33604 + 9 + i)] = nameBytes[i]
+
+const pc = parsePCBoxes(buf)
+assert.equal(pc.currentBox, 1)
+assert.equal(pc.count, 2)
+assert.equal(pc.boxes[0].mons.length, 1)
+assert.equal(pc.boxes[0].mons[0].slot, 0)
+assert.equal(pc.boxes[0].mons[0].nickname, 'TREE')
+assert.equal(pc.boxes[0].mons[0].nationalId, 252)
+assert.equal(pc.boxes[1].mons.length, 1)
+assert.equal(pc.boxes[1].mons[0].slot, 19, 'boundary-spanning mon lands in the right slot')
+assert.equal(pc.boxes[1].mons[0].nationalId, 25)
+assert.equal(pc.boxes[1].name, 'CAVE')
+assert.equal(pc.boxes[2].name, 'Box 3') // unnamed fallback
 
 console.log('gen3save: all assertions passed')
